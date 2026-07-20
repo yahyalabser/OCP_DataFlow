@@ -1,0 +1,29 @@
+# --- Environnement virtuel Python ---
+venv/
+env/
+.venv/
+
+# --- Secrets ---
+.env
+
+# --- Données générées par les collectors ---
+data/raw/
+
+# --- Logs générés automatiquement ---
+logs/
+
+# --- Fichiers Python compilés ---
+__pycache__/
+*.pyc
+*.pyo
+
+# --- IDE / éditeurs ---
+.vscode/
+.idea/
+*.swp
+
+# --- Système ---
+.DS_Store
+
+# --- Docker ---
+*.log
