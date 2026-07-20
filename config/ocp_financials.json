@@ -1,0 +1,20 @@
+[
+  {
+    "quarter": "Q1-2026",
+    "revenue": 25400000000,
+    "ebitda": 10200000000,
+    "ebitda_margin": null,
+    "net_income": 5100000000,
+    "published_at": "2026-04-25",
+    "source": "OCP Group communiqué"
+  },
+  {
+    "quarter": "Q2-2026",
+    "revenue": 26800000000,
+    "ebitda": 11000000000,
+    "ebitda_margin": null,
+    "net_income": 5600000000,
+    "published_at": "2026-07-25",
+    "source": "OCP Group communiqué"
+  }
+]
