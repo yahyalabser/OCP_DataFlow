@@ -181,7 +181,7 @@ Récupère les données de production agricole via l'API [FAOSTAT](https://www.f
 
 [FAOSTAT](https://www.fao.org/faostat/) est la base de données statistiques officielle de l'**Organisation des Nations Unies pour l'alimentation et l'agriculture**. Son API REST (`faostatservices.fao.org/api/v1`) donne accès à des dizaines de domaines statistiques (production, commerce, sécurité alimentaire, prix, émissions...), chacun identifié par un code (ex. `QCL` = *Crops and Livestock products*).
 
-- **Authentification** : token Bearer (en-tête `Authorization: Bearer <token>`).
+- **Authentification** : token Bearer (en-tête `Authorization: Bearer <token>`), obtenu via **AWS Cognito** — voir `config/auth.py` (section 4) pour le détail du mécanisme de génération/rafraîchissement du token.
 - **Système de dimensions/filtres** : chaque domaine se filtre par plusieurs dimensions — `area` (zone géographique), `item` (produit), `element` (type de mesure : production, superficie récoltée, rendement...), `year`. Chaque dimension a ses propres codes numériques internes (ex. zone Maroc = `143`, Blé = `15`).
 - **Élément `2510`** utilisé ici correspond au code de mesure **"Production"** (quantité produite, en tonnes) — à ne pas confondre avec les codes d'affichage utilisés dans l'interface web, qui diffèrent des codes de filtre de l'API.
 - **Limitation** : l'API ne renvoie qu'une combinaison de filtres à la fois pour ce type d'appel, d'où la triple boucle du collector plutôt qu'une requête unique groupée.
@@ -397,17 +397,60 @@ Charge les clés API / tokens depuis un fichier `.env` (via `python-dotenv`) :
 |---------------------|----------------------|
 | `API_KEY_NEWS`       | `NewsCollector`      |
 | `API_KEY_alpha`      | `AlphaVantageCollector` |
-| `TOKEN_FAO`          | `FAOCollector`       |
+| `FAO_USERNAME`       | `FAOCollector` (via `TokenManager` dans `auth.py`) |
+| `FAO_PASSWORD`       | `FAOCollector` (via `TokenManager` dans `auth.py`) |
 
 ### `config/auth.py`
-Fichier dédié à la logique d'authentification (distinct de `config.py` qui ne fait que charger les clés brutes depuis `.env`). Son contenu exact n'a pas encore été partagé — colle-le moi et je complète cette section avec le détail de son fonctionnement (ex. génération de token, rafraîchissement, signature de requêtes...).
+
+Contient la classe `TokenManager`, qui gère l'authentification auprès de **FAOSTAT via AWS Cognito** (le service d'authentification managé d'AWS). C'est ce token qui est ensuite utilisé en en-tête `Authorization: Bearer <token>` par `FAOCollector` (voir section 3.2).
+
+```python
+import boto3, time
+
+COGNITO_CLIENT_ID = "2csltsigao85ivhp6ojp1aic7o"
+COGNITO_REGION = "eu-west-1"
+
+class TokenManager:
+   def __init__(self, username: str, password: str):
+      self.username = username
+      self.password = password
+      self.client = boto3.client("cognito-idp", region_name=COGNITO_REGION)
+      self._token = None
+      self._expires_at = 0
+
+   def get_token(self) -> str:
+      if self._token is None or time.time() > self._expires_at - 60:
+         self._refresh()
+      return self._token
+
+   def _refresh(self):
+      response = self.client.initiate_auth(
+         ClientId=COGNITO_CLIENT_ID,
+         AuthFlow="USER_PASSWORD_AUTH",
+         AuthParameters={
+            "USERNAME": self.username,
+            "PASSWORD": self.password,
+         },
+      )
+      auth_result = response["AuthenticationResult"]
+      self._token = auth_result["AccessToken"]
+      self._expires_at = time.time() + auth_result["ExpiresIn"]
+```
+
+**Fonctionnement :**
+- `boto3` (SDK AWS officiel pour Python) est utilisé pour dialoguer avec **Amazon Cognito**, service géré par la FAO pour authentifier les utilisateurs de son API.
+- **`get_token()`** est le point d'entrée utilisé par les collectors : il renvoie un token valide, et ne déclenche un rafraîchissement (`_refresh()`) que si aucun token n'a encore été récupéré ou s'il expire dans moins de 60 secondes (marge de sécurité).
+- **`_refresh()`** utilise le flux d'authentification `USER_PASSWORD_AUTH` de Cognito : identifiants (`FAO_USERNAME`/`FAO_PASSWORD`) envoyés à Cognito, qui renvoie en retour un `AccessToken` (le vrai jeton à utiliser) et sa durée de validité (`ExpiresIn`, en secondes).
+- Ce mécanisme évite de générer un nouveau token à **chaque** requête (ce qui serait lent et inutile) : le même token est réutilisé pendant toute sa durée de vie, et n'est renouvelé qu'une fois arrivé (presque) à expiration — important ici vu le grand nombre de requêtes envoyées par `FAOCollector` (jusqu'à 280).
+- `COGNITO_CLIENT_ID` est l'identifiant de l'application cliente enregistrée côté FAO/Cognito (public, ce n'est pas un secret à proprement parler — contrairement au couple `FAO_USERNAME`/`FAO_PASSWORD`).
 
 Un fichier **`.env.example`** est fourni à la racine du projet comme modèle :
 
 ```dotenv
 API_KEY_alpha=
 API_KEY_NEWS=
-TOKEN_FAO=
+FAO_USERNAME=
+FAO_PASSWORD=
 ```
 
 📌 **À faire** : copier ce fichier en `.env` (`cp .env.example .env`) et renseigner les valeurs avant de lancer les collectors concernés :
@@ -416,7 +459,7 @@ TOKEN_FAO=
 cp .env.example .env
 ```
 
-⚠️ Le fichier `.env` (contenant les vraies clés) ne doit **jamais** être commité — pense à l'ajouter dans `.gitignore` s'il n'y est pas déjà.
+⚠️ Le fichier `.env` (contenant les vraies clés et identifiants) ne doit **jamais** être commité — pense à l'ajouter dans `.gitignore` s'il n'y est pas déjà.
 
 ### `config/ocp_financials.json`
 Fichier de données manuelles (voir `OCPFinancialsCollector`) — à mettre à jour à chaque publication trimestrielle d'OCP.
@@ -429,6 +472,9 @@ Script principal qui instancie et exécute les collectors les uns après les aut
 
 ```python
 collectors = [
+   NewsCollector(),
+   AlphaVantageCollector(),
+   WorldBankCollector(),
    FAOCollector(),
    FFPICollector(),
    OCPFinancialsCollector()
@@ -437,7 +483,7 @@ collectors = [
 
 Pour chaque collector : log de démarrage → `collect()` → succès/échec enregistré → log récapitulatif final (`results["success"]` / `results["failed"]`).
 
-> 💡 `AlphaVantageCollector`, `WorldBankCollector` et `NewsCollector` sont actuellement commentés dans la liste — à réactiver selon les besoins (clés API requises pour les deux premiers).
+> 💡 Les **6 collectors sont actifs** dans la liste — le pipeline complet (marchés financiers, prix des matières premières, production agricole, indice alimentaire, actualités et résultats OCP) est exécuté à chaque lancement de `run_collectors.py`. Pense à bien renseigner toutes les variables du `.env` (`API_KEY_alpha`, `API_KEY_NEWS`, `FAO_USERNAME`, `FAO_PASSWORD`) avant de lancer le script, sous peine de voir `AlphaVantageCollector`, `NewsCollector` et `FAOCollector` échouer faute d'authentification.
 
 ---
 
@@ -505,7 +551,8 @@ ou :
 docker run --rm \
   -e API_KEY_alpha=xxx \
   -e API_KEY_NEWS=xxx \
-  -e TOKEN_FAO=xxx \
+  -e FAO_USERNAME=xxx \
+  -e FAO_PASSWORD=xxx \
   collectors
 ```
 
