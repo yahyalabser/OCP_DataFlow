@@ -2,7 +2,6 @@ from abc import ABC, abstractmethod
 import requests, time
 
 class BaseCollector(ABC):
-
    def __init__(self, base_url: str, output_dir: str, logger, timeout: int = 15, max_retries: int = 3):
       self.base_url = base_url
       self.output_dir = output_dir
@@ -35,7 +34,6 @@ class BaseCollector(ABC):
       return None
 
    def _safe_json(self, response: requests.Response) -> dict | list | None:
-      """Parse le JSON d'une réponse en gérant les corps invalides (HTML, vide, etc.)."""
       try:
          return response.json()
       except ValueError as e:

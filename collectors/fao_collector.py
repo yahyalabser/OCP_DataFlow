@@ -1,15 +1,14 @@
 import json, os, time
 from logger_config import get_logger
+from config.auth import TokenManager
 from config.settings import URL_fao, output_dir_fao
-from config.config import TOKEN_FAO
+from config.config import FAO_USERNAME, FAO_PASSWORD
 from collectors.base_collector import BaseCollector
 
 class FAOCollector(BaseCollector):
    def __init__(self):
       super().__init__(URL_fao, output_dir_fao, get_logger("fao"))
-      self.header = {
-         'Authorization': f'Bearer {TOKEN_FAO}'
-      }
+      self.token_manager = TokenManager(FAO_USERNAME, FAO_PASSWORD)
       self.areas = {
          "Morocco": 143,
          "Brazil": 21,
@@ -51,7 +50,8 @@ class FAOCollector(BaseCollector):
                      "year": year
                   }
 
-                  response = self._request_with_retry(headers=self.header, params=params)
+                  headers = {"Authorization": f"Bearer {self.token_manager.get_token()}"}
+                  response = self._request_with_retry(headers=headers, params=params)
                   if response is None:
                      self.logger.error(f"Échec ({count}/{total}) : {area_name} | {item_name} | {year}")
                      time.sleep(self.request_delay)
