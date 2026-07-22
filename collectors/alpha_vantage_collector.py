@@ -19,7 +19,7 @@ class AlphaVantageCollector(BaseCollector):
       params = {
          "function": "TIME_SERIES_DAILY",
          "symbol": symbol,
-         "outputsize": "compact",  # plan gratuit : 100 derniers jours max
+         "outputsize": "compact",
          "apikey": self.api_key
       }
 
@@ -44,20 +44,16 @@ class AlphaVantageCollector(BaseCollector):
          data = self.collect_symbol(symbol)
          if data is not None:
             self.save(data, symbol)
-         time.sleep(12)  # limite Alpha Vantage : 5 req/min sur plan gratuit
+         time.sleep(12)
 
    def save(self, data, symbol) -> None:
       os.makedirs(self.output_dir, exist_ok=True)
 
-      # Copie horodatée : accumule l'historique jour après jour
-      # (contourne la limite outputsize=compact en construisant
-      # une série longue via des runs quotidiens successifs)
       timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
       dated_filename = f"{self.output_dir}/{symbol}_{timestamp}.json"
       with open(dated_filename, "w") as f:
          json.dump(data, f, indent=2)
 
-      # Copie "latest" écrasée à chaque run, pratique pour l'étape suivante du pipeline
       latest_filename = f"{self.output_dir}/{symbol}_latest.json"
       with open(latest_filename, "w") as f:
          json.dump(data, f, indent=2)

@@ -10,13 +10,13 @@ class BaseCollector(ABC):
       self.timeout = timeout
       self.max_retries = max_retries
 
-   def _request_with_retry(self, url: str = None, method: str = "GET", **kwargs) -> requests.Response | None:
+   def _request_with_retry(self, url: str = None, **kwargs) -> requests.Response | None:
       url = url or self.base_url
       kwargs.setdefault("timeout", self.timeout)
 
       for attempt in range(1, self.max_retries + 1):
          try:
-            response = requests.request(method, url, **kwargs)
+            response = requests.request(url, **kwargs)
             response.raise_for_status()
             return response
 

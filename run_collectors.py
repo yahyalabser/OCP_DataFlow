@@ -9,9 +9,9 @@ from logger_config import get_logger
 logger = get_logger("run_collectors")
 
 collectors = [
-   # NewsCollector(),
-   # AlphaVantageCollector(),
-   # WorldBankCollector(),
+   NewsCollector(),
+   AlphaVantageCollector(),
+   WorldBankCollector(),
    FAOCollector(),
    FFPICollector(),
    OCPFinancialsCollector()
