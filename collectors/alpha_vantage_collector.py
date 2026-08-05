@@ -1,4 +1,4 @@
-import os, json, time
+import time
 from datetime import datetime, timezone
 from logger_config import get_logger
 from config.config import API_KEY_alpha
@@ -27,10 +27,8 @@ class AlphaVantageCollector(BaseCollector):
       if response is None:
          return None
 
-      try:
-         data = response.json()
-      except ValueError as e:
-         self.logger.error(f"Réponse JSON invalide pour {symbol} : {e}")
+      data = self._safe_json(response, context=symbol)
+      if data is None:
          return None
 
       if "Note" in data or "Information" in data or "Error Message" in data:
@@ -40,22 +38,13 @@ class AlphaVantageCollector(BaseCollector):
       return data
 
    def collect(self) -> None:
-      for symbol in self.stocks:
+      for i, symbol in enumerate(self.stocks):
          data = self.collect_symbol(symbol)
          if data is not None:
             self.save(data, symbol)
-         time.sleep(12)
+         if i < len(self.stocks) - 1:
+            time.sleep(12)
 
    def save(self, data, symbol) -> None:
-      os.makedirs(self.output_dir, exist_ok=True)
-
       timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-      dated_filename = f"{self.output_dir}/{symbol}_{timestamp}.json"
-      with open(dated_filename, "w") as f:
-         json.dump(data, f, indent=2)
-
-      latest_filename = f"{self.output_dir}/{symbol}_latest.json"
-      with open(latest_filename, "w") as f:
-         json.dump(data, f, indent=2)
-
-      self.logger.info(f"Sauvegardé {symbol} ({dated_filename} et {latest_filename})")
+      self._save_dated_and_latest(self._save_json, data, symbol, timestamp, "json")

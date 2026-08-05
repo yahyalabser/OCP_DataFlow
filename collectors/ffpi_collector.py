@@ -1,9 +1,7 @@
-import os
 from datetime import datetime, timezone
 from logger_config import get_logger
 from config.settings import URL_ffpi, output_dir_ffpi
 from collectors.base_collector import BaseCollector
-
 
 class FFPICollector(BaseCollector):
    def __init__(self):
@@ -25,18 +23,5 @@ class FFPICollector(BaseCollector):
       self.logger.info("Téléchargement FFPI terminé.")
 
    def save(self, data) -> None:
-      os.makedirs(self.output_dir, exist_ok=True)
-
-      # Copie horodatée pour garder un historique des publications mensuelles
       timestamp = datetime.now(timezone.utc).strftime("%Y-%m")
-      filename = f"{self.output_dir}/ffpi_{timestamp}.csv"
-
-      with open(filename, "wb") as f:
-         f.write(data.content)
-
-      # Copie "latest" écrasée à chaque run, pratique pour les étapes suivantes du pipeline
-      latest_path = f"{self.output_dir}/ffpi_latest.csv"
-      with open(latest_path, "wb") as f:
-         f.write(data.content)
-
-      self.logger.info(f"Sauvegardé dans {filename} (et {latest_path})")
+      self._save_dated_and_latest(self._save_bytes, data.content, "ffpi", timestamp, "csv")

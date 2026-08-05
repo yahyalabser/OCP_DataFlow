@@ -84,10 +84,5 @@ class OCPFinancialsCollector(BaseCollector):
       self.save(validated)
 
    def save(self, data: list[dict]) -> None:
-      os.makedirs(self.output_dir, exist_ok=True)
-      filename = f"{self.output_dir}/ocp_financials.json"
-
-      with open(filename, "w", encoding="utf-8") as f:
-         json.dump(data, f, indent=2, ensure_ascii=False)
-
-      self.logger.info(f"Sauvegardé {len(data)} trimestre(s) dans {filename}")
+      self._save_json(data, "ocp_financials.json")
+      self.logger.info(f"Sauvegardé {len(data)} trimestre(s)")

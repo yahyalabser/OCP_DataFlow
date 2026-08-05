@@ -1,4 +1,4 @@
-import os, json, time
+import time
 from logger_config import get_logger
 from config.config import API_KEY_NEWS
 from config.settings import URL_news, output_dir_news
@@ -9,7 +9,7 @@ class NewsCollector(BaseCollector):
    def __init__(self):
       super().__init__(URL_news, output_dir_news, get_logger("news"))
       self.api_key = API_KEY_NEWS
-      self.keywords = ['"OCP Group"', '"OCP SA"', "phosphate", "fertilizer", "agriculture"]
+      self.keywords = ['OCP Group OR "OCP Morocco"', "phosphate", "fertilizer", "agriculture AND fertilizer", 'Mosaic OR Nutrien OR Yara OR "CF Industries" OR "ICL Group"']
 
    def collect_keyword(self, keyword: str, days_back: int = 1) -> list[dict] | None:
       if not self.api_key:
@@ -32,10 +32,8 @@ class NewsCollector(BaseCollector):
       if response is None:
          return None
 
-      try:
-         payload = response.json()
-      except ValueError as e:
-         self.logger.error(f"Réponse JSON invalide pour '{keyword}' : {e}")
+      payload = self._safe_json(response, context=keyword)
+      if payload is None:
          return None
 
       if payload.get("status") == "error":
@@ -49,13 +47,10 @@ class NewsCollector(BaseCollector):
    def collect(self) -> None:
       all_news = {}
       for keyw in self.keywords:
-         all_news[keyw] = self.collect_keyword(keyw)
+         all_news[keyw] = self.collect_keyword(keyw) or []
          time.sleep(1)
       self.save(all_news)
 
    def save(self, data: dict) -> None:
-      os.makedirs(self.output_dir, exist_ok=True)
-      filename = f"{self.output_dir}/news_{datetime.now(timezone.utc):%Y-%m-%d_%H%M%S}.json"
-      with open(filename, "w") as f:
-         json.dump(data, f, indent=2, ensure_ascii=False)
-      self.logger.info(f"Sauvegardé dans {filename}")
+      filename = f"news_{datetime.now(timezone.utc):%Y-%m-%d_%H%M%S}.json"
+      self._save_json(data, filename)
