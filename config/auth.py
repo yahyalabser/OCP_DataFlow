@@ -1,4 +1,5 @@
 import boto3, time
+from botocore.exceptions import ClientError, BotoCoreError
 
 COGNITO_CLIENT_ID = "2csltsigao85ivhp6ojp1aic7o"
 COGNITO_REGION = "eu-west-1"
@@ -11,20 +12,24 @@ class TokenManager:
       self._token = None
       self._expires_at = 0
 
-   def get_token(self) -> str:
+   def get_token(self) -> str | None:
       if self._token is None or time.time() > self._expires_at - 60:
          self._refresh()
       return self._token
 
-   def _refresh(self):
-      response = self.client.initiate_auth(
-         ClientId=COGNITO_CLIENT_ID,
-         AuthFlow="USER_PASSWORD_AUTH",
-         AuthParameters={
-            "USERNAME": self.username,
-            "PASSWORD": self.password,
-         },
-      )
-      auth_result = response["AuthenticationResult"]
-      self._token = auth_result["AccessToken"]
-      self._expires_at = time.time() + auth_result["ExpiresIn"]
+   def _refresh(self) -> None:
+      try:
+         response = self.client.initiate_auth(
+            ClientId=COGNITO_CLIENT_ID,
+            AuthFlow="USER_PASSWORD_AUTH",
+            AuthParameters={
+               "USERNAME": self.username,
+               "PASSWORD": self.password,
+            },
+         )
+         auth_result = response["AuthenticationResult"]
+         self._token = auth_result["AccessToken"]
+         self._expires_at = time.time() + auth_result["ExpiresIn"]
+      except (ClientError, BotoCoreError, KeyError) as e:
+         self._token = None
+         raise RuntimeError(f"Échec d'authentification Cognito : {e}") from e
