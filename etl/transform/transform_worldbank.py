@@ -22,6 +22,7 @@ def clean(df : pd.DataFrame) -> pd.DataFrame:
 
 def transform(df: pd.DataFrame) -> dict:
    long_df = df.melt(id_vars=["full_date"], var_name="commodity_raw", value_name="price")
+   long_df["price"] = pd.to_numeric(long_df["price"], errors="coerce")
    extracted = long_df["commodity_raw"].str.extract(r"^(.*?)\s*\(([^)]+)\)\s*$")
    long_df["commodity_name"] = extracted[0].str.strip()
    long_df["unit"] = extracted[1].str.strip()
@@ -35,7 +36,7 @@ def transform(df: pd.DataFrame) -> dict:
 def run() -> pd.DataFrame:
    filepath = Path(output_dir_world_bank) / "commodity_prices.xlsx"
    if not filepath.exists():
-      raise FileNotFoundError(f"Aucune donnée News trouvée dans {filepath}")
+      raise FileNotFoundError(f"Aucune donnée World Bank trouvée dans {filepath}")
 
    raw = pd.read_excel(filepath, sheet_name="Monthly Prices", header=None)
 

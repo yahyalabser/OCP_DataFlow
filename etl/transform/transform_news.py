@@ -16,7 +16,7 @@ def _clean_text(text: str) -> str:
 
 def clean(df: pd.DataFrame) -> pd.DataFrame:
    df["author"] = df["author"].fillna("Unknown")
-   df["date"] = pd.to_datetime(df["date"])
+   df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
    df["content"] = df["content"].apply(_clean_text)
    df["title"] = df["title"].apply(_clean_text)
    return df
