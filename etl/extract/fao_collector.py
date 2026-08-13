@@ -2,12 +2,13 @@ import time
 from logger_config import get_logger
 from config.auth import TokenManager
 from config.settings import URL_fao, output_dir_fao
-from config.config import FAO_USERNAME, FAO_PASSWORD
+from config.config import get_fao_credentials
 from etl.extract.extract_base import BaseCollector
 
 class FAOCollector(BaseCollector):
    def __init__(self):
       super().__init__(URL_fao, output_dir_fao, get_logger("fao"))
+      FAO_USERNAME, FAO_PASSWORD = get_fao_credentials()
       self.token_manager = TokenManager(FAO_USERNAME, FAO_PASSWORD)
       self.areas = {
          "Morocco": 143,

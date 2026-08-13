@@ -16,15 +16,29 @@ def _clean_text(text: str) -> str:
 
 def clean(df: pd.DataFrame) -> pd.DataFrame:
    df["author"] = df["author"].fillna("Unknown")
-   df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
+   df["title"] = df["title"].fillna("N/A")
+   df["content"] = df["content"].fillna("N/A")
+   df["date"] = pd.to_datetime(df["date"])
    df["content"] = df["content"].apply(_clean_text)
    df["title"] = df["title"].apply(_clean_text)
+
+   df["published_at"] = df["date"]                    
+   df["full_date"] = pd.to_datetime(df["date"]).dt.tz_localize(None).dt.normalize()       
+   df = df.drop(columns=["date"]) 
+
    return df
 
 def transform(df : pd.DataFrame) -> pd.DataFrame:
-   bridge_df = df[["url", "keyword"]].drop_duplicates()
+   bridge_df = df[["url", "keyword"]].drop_duplicates().reset_index(drop=True)
    news_df = df.drop_duplicates(subset=["url"], keep="first").drop(columns=["keyword"])
-   return {"news": news_df, "bridge": bridge_df}
+   dim_news_source = df[["source_name"]].drop_duplicates().reset_index(drop=True)
+   dim_keyword = df[["keyword"]].drop_duplicates().reset_index(drop=True)
+   return {
+      "FactNews": news_df,
+      "BridgeArticleKeyword": bridge_df,
+      "DimNewsSource" : dim_news_source,
+      "DimKeyword" : dim_keyword
+   }
 
 def run() -> pd.DataFrame:
    filepath = Path(output_dir_news) / "news_latest.json"
@@ -44,7 +58,7 @@ def run() -> pd.DataFrame:
             "source_name": article["source"]["name"],
             "url": article["url"],
             "title": article.get("title"),
-            "author": article.get("author") or "Unknown",
+            "author": article.get("author"),
             "content": article.get("content"),
          })
 

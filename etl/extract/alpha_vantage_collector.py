@@ -1,14 +1,14 @@
 import time
 from datetime import datetime, timezone
 from logger_config import get_logger
-from config.config import API_KEY_alpha
+from config.config import get_api_key_alpha
 from config.settings import URL_alpha, output_dir_alpha
 from etl.extract.extract_base import BaseCollector
 
 class AlphaVantageCollector(BaseCollector):
    def __init__(self):
       super().__init__(URL_alpha, output_dir_alpha, get_logger("alphavantage"))
-      self.api_key = API_KEY_alpha
+      self.api_key = get_api_key_alpha()
       self.stocks = ["MOS", "NTR", "CF", "ICL", "YARIY"]
 
    def collect_symbol(self, symbol: str) -> dict | None:

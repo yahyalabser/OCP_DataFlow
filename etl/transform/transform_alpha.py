@@ -5,8 +5,18 @@ from .io_utils import load_json
 
 def clean(df: pd.DataFrame) -> pd.DataFrame:
    df = df.dropna(subset=["open", "high", "low", "close"])
-   df["date"] = pd.to_datetime(df["date"])
+   df["full_date"] = pd.to_datetime(df["full_date"])
    return df
+
+def transform(df: pd.DataFrame) -> dict:
+   dim_company = df[["symbol"]].drop_duplicates().reset_index(drop=True)
+   dim_company["company_name"] = "Unknown"
+   dim_company["sector"] = "Unknown"
+
+   return {
+      "DimCompany" : dim_company,
+      "FactStockPrices" : df
+   }
 
 def run() -> pd.DataFrame:
    files = glob.glob(os.path.join(output_dir_alpha, "*_latest.json"))
@@ -20,7 +30,7 @@ def run() -> pd.DataFrame:
       series = raw["Time Series (Daily)"]
       all_rows.extend({
          "symbol": symbol,
-         "date": d,
+         "full_date": d,
          "open": float(v["1. open"]),
          "high": float(v["2. high"]),
          "low": float(v["3. low"]),
@@ -29,4 +39,5 @@ def run() -> pd.DataFrame:
       } for d, v in series.items())
 
    df = pd.DataFrame(all_rows)
-   return clean(df)
+   df = clean(df)
+   return transform(df)

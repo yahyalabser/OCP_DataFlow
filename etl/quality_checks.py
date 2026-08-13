@@ -2,27 +2,41 @@ import pandera.pandas as pa
 from pandera import Column, Check
 
 SCHEMAS = {
-   "stock_prices": pa.DataFrameSchema({
+   "DimCompany" : pa.DataFrameSchema({
       "symbol": Column(str, nullable=False),
-      "date": Column("datetime64[ns]", nullable=False),
+      "company_name": Column(str, nullable=False),
+      "sector": Column(str, nullable=False),
+   }, unique=["symbol"]),
+   "FactStockPrices": pa.DataFrameSchema({
+      "symbol": Column(str, nullable=False),
+      "full_date": Column("datetime64[ns]", nullable=False),
       "open": Column(float, Check.ge(0), nullable=False),
       "high": Column(float, Check.ge(0), nullable=False),
       "low": Column(float, Check.ge(0), nullable=False),
       "close": Column(float, Check.ge(0), nullable=False),
       "volume": Column(int, Check.ge(0), nullable=False),
-   }, unique=["symbol", "date"]),
-   "crop_production" : pa.DataFrameSchema({
+   }, unique=["symbol", "full_date"]),
+   "FactCropProduction" : pa.DataFrameSchema({
+      "full_date" : Column("datetime64[ns]", nullable=False),
+      "country_code" : Column(int, Check.ge(0), nullable=False),
+      "crop_code" : Column(int, Check.ge(0), nullable=False),
+      "element_code" : Column(int, Check.ge(0), nullable=False),
+      "value" : Column(float, Check.ge(0), nullable=False),
+   }, unique=["full_date", "country_code", "crop_code", "element_code"]),
+   "DimCountry" : pa.DataFrameSchema({
       "country_code" : Column(int, Check.ge(0), nullable=False),
       "country_name" : Column(str, nullable=False),
-      "element_code" : Column(int, Check.ge(0), nullable=False),
-      "element_name" : Column(str, nullable=False),
+   }, unique=["country_code"]),
+   "DimCrop" : pa.DataFrameSchema({
       "crop_code" : Column(int, Check.ge(0), nullable=False),
       "crop_name" : Column(str, nullable=False),
-      "Unit" : Column(str, nullable=False),
-      "value" : Column(float, Check.ge(0), nullable=False),
-      "full_date" : Column("datetime64[ns]", nullable=False),
-   }, unique=["full_date", "country_code", "crop_code", "element_code"]),
-   "food_price_index" : pa.DataFrameSchema({
+   }, unique=["crop_code"]),
+   "DimElement" : pa.DataFrameSchema({
+      "element_code" : Column(int, Check.ge(0), nullable=False),
+      "element_name" : Column(str, nullable=False),
+      "unit" : Column(str, nullable=False),
+   }, unique=["element_code"]),
+   "FactFoodPriceIndex" : pa.DataFrameSchema({
       "full_date" : Column("datetime64[ns]", nullable=False),
       "food_index" : Column(float, Check.ge(0), nullable=False),
       "meat_price" : Column(float, Check.ge(0), nullable=False),
@@ -31,7 +45,7 @@ SCHEMAS = {
       "oils_price" : Column(float, Check.ge(0), nullable=False),
       "sugar_price" : Column(float, Check.ge(0), nullable=False) 
    }, unique=["full_date"]),
-   "ocp_financials": pa.DataFrameSchema({
+   "FactOCPFinancials": pa.DataFrameSchema({
       "quarter_label": Column(str, nullable=False),
       "revenue": Column(float, Check.ge(0), nullable=False),
       "ebitda": Column(float, Check.ge(0), nullable=False),
@@ -39,23 +53,31 @@ SCHEMAS = {
       "net_income": Column(float, nullable=False),
       "full_date" : Column("datetime64[ns]", nullable=False)
    }, unique=["quarter_label"]),
-   "news": pa.DataFrameSchema({
-      "date": Column("datetime64[ns]", nullable=False),
+   "DimNewsSource" : pa.DataFrameSchema({
+      "source_name": Column(str, nullable=False),
+   }, unique=["source_name"]),
+   "DimKeyword" : pa.DataFrameSchema({
+      "keyword": Column(str, nullable=False),
+   }, unique=["keyword"]),
+   "FactNews": pa.DataFrameSchema({
+      "full_date": Column("datetime64[ns]", nullable=False),
       "source_name": Column(str, nullable=False),
       "url": Column(str, nullable=False),
       "title": Column(str, nullable=False),
       "author": Column(str, nullable=False),
       "content": Column(str, nullable=False),
+      "published_at" : Column("datetime64[ns, UTC]", nullable=False)
    }, unique=["url"]),
-   "bridge": pa.DataFrameSchema({
+   "BridgeArticleKeyword": pa.DataFrameSchema({
       "url": Column(str, nullable=False),
       "keyword": Column(str, nullable=False),
    }, unique=["url", "keyword"]),
-   "Commodity": pa.DataFrameSchema({
+   "DimCommodity": pa.DataFrameSchema({
+      "commodity_code": Column(str, nullable=False),
       "commodity_name": Column(str, nullable=False),
       "unit": Column(str, nullable=False),
    }, unique=["commodity_name"]),
-   "Commodity Prices": pa.DataFrameSchema({
+   "FactCommodityPrices": pa.DataFrameSchema({
       "full_date": Column("datetime64[ns]", nullable=False),
       "commodity_name": Column(str, nullable=False),
       "price": Column(float, Check.ge(0), nullable=True),
