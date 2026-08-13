@@ -158,6 +158,34 @@ Fonctions notables : `TIME_SERIES_INTRADAY`, `TIME_SERIES_WEEKLY`, `TIME_SERIES_
 - `Meta Data` : informations sur la requête (symbole, date de dernière mise à jour, fuseau horaire).
 - `Time Series (Daily)` : dictionnaire dont chaque clé est une date (`AAAA-MM-JJ`) et chaque valeur un objet OHLCV (Open/High/Low/Close/Volume) pour ce jour-là. En mode `compact`, environ 100 dernières séances sont renvoyées.
 
+#### 🎓 Comprendre le sens de ces données (avant de les mettre en base)
+
+Alpha Vantage renvoie **le prix d'une action**, pas la valeur de toute l'entreprise. Il est important de bien saisir cette nuance avant de concevoir le schéma SQL, car ça détermine ce que représente réellement une ligne de `fact_prices`.
+
+- **Une action** = une petite part de la propriété d'une entreprise (une entreprise découpée en, disons, 1 000 000 d'actions ; posséder 1 action = posséder une infime part de l'entreprise).
+- **Pourquoi une entreprise émet des actions** : pour lever des fonds (investir, construire, croître) sans emprunter uniquement à une banque.
+- **Pourquoi le prix change** : il reflète l'équilibre offre/demande entre acheteurs et vendeurs, influencé par les résultats financiers, les actualités, le contexte économique et les attentes des investisseurs — le prix reflète donc **la perception du marché**, pas une mesure comptable directe.
+- **OHLCV** :
+
+| Lettre | Signification |
+|--------|----------------|
+| O | Open — prix d'ouverture d'une action |
+| H | High — prix maximum atteint sur la période |
+| L | Low — prix minimum atteint sur la période |
+| C | Close — prix de clôture d'une action |
+| V | Volume — nombre d'actions échangées sur la période |
+
+- **Valeur totale de l'entreprise (capitalisation boursière)**, si besoin un jour : `Prix d'une action × Nombre total d'actions`. Ce n'est **pas** ce que retourne directement Alpha Vantage — seulement le prix unitaire.
+- **Dans OCP DataFlow, ces données ne servent pas au trading** : elles sont utilisées comme **indicateur de la confiance du marché** envers les concurrents cotés d'OCP (si `MOS` passe de 34$ à 38$, le marché est plus optimiste sur Mosaic — cela ne prouve pas que Mosaic a gagné plus d'argent ce jour-là). Cet indicateur est ensuite combiné avec les news, les données FAO/World Bank et les résultats OCP pour l'analyse globale.
+
+| Symbole | Entreprise | Pourquoi suivie |
+|---------|-------------|------------------|
+| `MOS` | The Mosaic Company | Concurrent d'OCP sur les phosphates |
+| `NTR` | Nutrien | Leader mondial des engrais |
+| `CF` | CF Industries | Producteur d'engrais azotés |
+| `ICL` | ICL Group | Acteur majeur des engrais et minéraux |
+| `YARIY` | Yara International | Leader mondial des engrais |
+
 ---
 
 ### 3.2 `FAOCollector` — Production agricole (FAOSTAT)
@@ -213,6 +241,24 @@ Récupère les données de production agricole via l'API [FAOSTAT](https://www.f
 - `Value` : la quantité produite, dans l'unité indiquée par `Unit` (tonnes ici).
 - `Flag` : qualifie la fiabilité/origine de la donnée (`A` = donnée officielle, `E` = estimation, etc.).
 
+#### 🔎 Comprendre le `element` (`2510`) — pourquoi ce code précis ?
+
+Le `self.element = 2510` utilisé dans `FAOCollector` **n'est ni une zone, ni une culture** : c'est un **Element Code**, la dimension FAOSTAT qui précise **quel type de donnée** on demande pour une culture donnée.
+
+Pour une même culture (le blé, par exemple), la FAO expose plusieurs types de mesures, chacune avec son propre code :
+
+| Élément          | Signification      |
+|------------------|----------------------|
+| Production       | Quantité produite    |
+| Area Harvested   | Surface récoltée     |
+| Yield            | Rendement             |
+| Imports          | Importations          |
+| Exports          | Exportations          |
+
+`2510` correspond précisément à **"Production"**. Une requête avec `area=143` (Maroc), `item=15` (Blé), `element=2510`, `year=2024` revient donc à demander : *"quelle quantité de blé le Maroc a-t-il produite en 2024 ?"*.
+
+Ce choix n'est pas arbitraire : l'objectif du collector est de suivre la **production agricole** (le volume de récolte), pas les surfaces cultivées ni les échanges commerciaux — c'est cette donnée qui est la plus pertinente pour estimer la demande potentielle en engrais.
+
 ---
 
 ### 3.3 `FFPICollector` — FAO Food Price Index
@@ -244,6 +290,20 @@ Ce n'est pas une API à proprement parler mais un **fichier CSV statique** publi
 
 - Chaque ligne = un mois, chaque colonne = l'indice global ou l'un des 5 sous-indices sectoriels.
 - Toutes les valeurs sont des **indices** (base 100 sur 2014-2016), pas des prix absolus en devise.
+
+#### 🔎 Ce que contient (et ne contient pas) le CSV
+
+Point important pour éviter toute confusion : **le CSV ne liste pas des aliments avec leur prix** (il ne contient pas de ligne "Blé — 250 $/tonne"). Chaque colonne est un **indice agrégé** pour toute une famille de produits :
+
+- `Cereals` : indice combiné du blé, maïs, riz, orge, etc. — pas un aliment unique.
+- `Meat`, `Dairy`, `Vegetable Oils`, `Sugar` : même principe, un indice par grande catégorie.
+- `Food Price Index` : l'indice **global**, une pondération des 5 sous-indices ci-dessus, qui résume en un seul chiffre la tendance générale des prix alimentaires mondiaux.
+
+Une analogie utile : `Food Price Index` joue le rôle d'une "température moyenne du pays", tandis que `Cereals`, `Meat`, etc. sont les "températures par ville" — le détail par catégorie derrière la moyenne globale.
+
+Comment lire une valeur : 100 = même niveau que la période de référence (2014-2016) ; 118 = prix environ 18 % plus élevés qu'à cette période ; 90 = prix environ 10 % plus bas. Une hausse du FFPI est utilisée dans ce projet comme signal indirect : des prix agricoles plus élevés peuvent améliorer les revenus des agriculteurs et, potentiellement, leur capacité à investir dans les engrais — un lien indicatif, pas une règle absolue.
+
+⚠️ Les noms exacts de colonnes peuvent légèrement varier d'une publication à l'autre (ex. `Vegetable Oils` vs `Oils`). Pour vérifier la structure réelle du fichier téléchargé : `pandas.read_csv(...).columns`.
 
 ---
 
@@ -404,8 +464,57 @@ Charge les clés API / tokens depuis un fichier `.env` (via `python-dotenv`) :
 
 Contient la classe `TokenManager`, qui gère l'authentification auprès de **FAOSTAT via AWS Cognito** (le service d'authentification managé d'AWS). C'est ce token qui est ensuite utilisé en en-tête `Authorization: Bearer <token>` par `FAOCollector` (voir section 3.2).
 
+#### 🔎 AWS, services AWS et `boto3` — les bases
+
+**AWS (Amazon Web Services)** est une plateforme de cloud computing : plutôt que d'acheter et de gérer soi-même des serveurs, des bases de données ou un système d'authentification, on utilise à la demande des services déjà prêts, exposés sur Internet. Chaque **service AWS** est spécialisé dans une tâche précise, par exemple :
+
+| Service      | Rôle                                    |
+|--------------|-------------------------------------------|
+| **S3**       | Stocker des fichiers                      |
+| **EC2**      | Héberger des serveurs virtuels            |
+| **RDS**      | Gérer une base de données SQL             |
+| **DynamoDB** | Base de données NoSQL                     |
+| **Lambda**   | Exécuter du code sans gérer de serveur    |
+| **Cognito**  | Gérer les utilisateurs et l'authentification |
+| **SNS**      | Envoyer des notifications                 |
+
+**`boto3`** n'est **pas** un service AWS : c'est le **SDK Python officiel**, l'intermédiaire qui permet à du code Python de communiquer avec n'importe quel service AWS.
+
+```text
+Ton code Python → boto3 → Service AWS (Cognito, S3, RDS, ...) → Exécution de l'action demandée
+```
+
+Concrètement, on choisit le service voulu via `boto3.client("<nom_du_service>")` :
+
+```python
+boto3.client("cognito-idp")  # authentification (utilisé ici par TokenManager)
+boto3.client("s3")           # stockage de fichiers
+boto3.client("dynamodb")     # base de données NoSQL
+```
+
+Dans ce projet, `TokenManager` appelle `boto3.client("cognito-idp", region_name=COGNITO_REGION)` : `boto3` ne fait qu'acheminer la requête et la réponse — c'est **Cognito** qui réalise réellement l'authentification (vérification `username`/`password`, émission du token).
+
+#### 🔎 `TokenManager` pas à pas
+
+**Constructeur (`__init__`)** : mémorise `username`/`password`, crée un client Cognito (`self.client`), et initialise l'état "pas encore de token" (`self._token = None`, `self._expires_at = 0`).
+
+**`get_token()`** — point d'entrée utilisé par les collectors :
+1. Si aucun token n'a encore été récupéré (`self._token is None`), ou s'il expire dans moins de 60 secondes (`time.time() > self._expires_at - 60`), on appelle `_refresh()`.
+2. Sinon, le token déjà en mémoire est réutilisé tel quel.
+
+La marge de sécurité de **60 secondes** évite qu'une requête parte avec un token expiré entre le moment où on le vérifie et le moment où il est réellement utilisé (ex. token expirant à 15:00:00 → renouvelé dès 14:59:00, plutôt que d'attendre 15:00:00 pile et risquer un appel à 15:00:01 avec un token déjà mort).
+
+**`_refresh()`** — contacte réellement Cognito via `initiate_auth(AuthFlow="USER_PASSWORD_AUTH", ...)`, qui renvoie un `AuthenticationResult` contenant `AccessToken` (le jeton à utiliser) et `ExpiresIn` (durée de validité en secondes). Le code calcule alors `self._expires_at = time.time() + ExpiresIn` pour savoir quand renouveler.
+
+**Pourquoi mettre le token en cache plutôt que de le régénérer à chaque appel ?** Parce que `FAOCollector` peut effectuer jusqu'à 280 requêtes dans une seule collecte (8 zones × 7 cultures × 5 années) : régénérer un token Cognito à chaque requête serait lent et inutile, alors que le même token reste valide pendant toute sa durée de vie (typiquement 1h).
+
+**Gestion des erreurs** : voir le paragraphe dédié ci-dessus (`ClientError`, `BotoCoreError`, `KeyError` → `RuntimeError`).
+
+**Pourquoi centraliser cette logique dans une classe dédiée ?** Sans `TokenManager`, chaque endroit du code qui a besoin d'un token devrait réimplémenter la vérification d'expiration et l'appel à Cognito. En centralisant, le reste du projet se contente de `token_manager.get_token()` sans se soucier de l'existence, de l'expiration ou du renouvellement du token — une séparation des responsabilités qui rend le code plus simple à maintenir et à réutiliser.
+
 ```python
 import boto3, time
+from botocore.exceptions import ClientError, BotoCoreError
 
 COGNITO_CLIENT_ID = "2csltsigao85ivhp6ojp1aic7o"
 COGNITO_REGION = "eu-west-1"
@@ -418,23 +527,27 @@ class TokenManager:
       self._token = None
       self._expires_at = 0
 
-   def get_token(self) -> str:
+   def get_token(self) -> str | None:
       if self._token is None or time.time() > self._expires_at - 60:
          self._refresh()
       return self._token
 
-   def _refresh(self):
-      response = self.client.initiate_auth(
-         ClientId=COGNITO_CLIENT_ID,
-         AuthFlow="USER_PASSWORD_AUTH",
-         AuthParameters={
-            "USERNAME": self.username,
-            "PASSWORD": self.password,
-         },
-      )
-      auth_result = response["AuthenticationResult"]
-      self._token = auth_result["AccessToken"]
-      self._expires_at = time.time() + auth_result["ExpiresIn"]
+   def _refresh(self) -> None:
+      try:
+         response = self.client.initiate_auth(
+            ClientId=COGNITO_CLIENT_ID,
+            AuthFlow="USER_PASSWORD_AUTH",
+            AuthParameters={
+               "USERNAME": self.username,
+               "PASSWORD": self.password,
+            },
+         )
+         auth_result = response["AuthenticationResult"]
+         self._token = auth_result["AccessToken"]
+         self._expires_at = time.time() + auth_result["ExpiresIn"]
+      except (ClientError, BotoCoreError, KeyError) as e:
+         self._token = None
+         raise RuntimeError(f"Échec d'authentification Cognito : {e}") from e
 ```
 
 **Fonctionnement :**
@@ -443,6 +556,7 @@ class TokenManager:
 - **`_refresh()`** utilise le flux d'authentification `USER_PASSWORD_AUTH` de Cognito : identifiants (`FAO_USERNAME`/`FAO_PASSWORD`) envoyés à Cognito, qui renvoie en retour un `AccessToken` (le vrai jeton à utiliser) et sa durée de validité (`ExpiresIn`, en secondes).
 - Ce mécanisme évite de générer un nouveau token à **chaque** requête (ce qui serait lent et inutile) : le même token est réutilisé pendant toute sa durée de vie, et n'est renouvelé qu'une fois arrivé (presque) à expiration — important ici vu le grand nombre de requêtes envoyées par `FAOCollector` (jusqu'à 280).
 - `COGNITO_CLIENT_ID` est l'identifiant de l'application cliente enregistrée côté FAO/Cognito (public, ce n'est pas un secret à proprement parler — contrairement au couple `FAO_USERNAME`/`FAO_PASSWORD`).
+- **Gestion des erreurs** : `_refresh()` capture les exceptions liées à Cognito (`ClientError`, `BotoCoreError`) ainsi que `KeyError` (réponse malformée ne contenant pas les clés attendues). Le token est remis à `None` puis une `RuntimeError` explicite est levée (`raise ... from e`, pour conserver la trace d'origine). C'est cette `RuntimeError` que `FAOCollector.collect()` intercepte : à l'échec du tout premier appel, la collecte est annulée immédiatement (`self.logger.critical`) ; à l'échec d'un rafraîchissement en cours de boucle, les données déjà accumulées sont sauvegardées avant l'arrêt (`self.logger.error` + `self.save(all_data)`).
 
 Un fichier **`.env.example`** est fourni à la racine du projet comme modèle :
 
@@ -581,4 +695,24 @@ Ce fichier évite de copier dans l'image Docker des éléments sensibles ou inut
 - `.env` → clés API réelles, ne doit jamais se retrouver dans une image (surtout si celle-ci est ensuite publiée sur un registre) ;
 - `data/` et `logs/` → générés à l'exécution, inutiles (et potentiellement volumineux) dans l'image de base ;
 - `.git/` → historique Git, alourdit l'image sans utilité à l'exécution ;
+
+---
+
+## ✅ 7. Changelog — Corrections et ajouts récents
+
+Suivi des dernières améliorations apportées au projet.
+
+### `collectors/base_collector.py`
+- **Pas de retry inutile sur les erreurs client (4xx)** : `_request_with_retry()` distingue désormais les erreurs serveur/réseau (retryables, avec backoff exponentiel) des erreurs client comme `401` (clé API invalide), `403` ou `404` (non retryables, car réessayer ne change rien au résultat). Le code arrête immédiatement et logue l'erreur au lieu d'attendre inutilement le backoff complet.
+
+### Fichiers manquants ajoutés à la racine du projet
+Ces fichiers étaient documentés dans ce README mais absents du dépôt — ils sont maintenant présents et à jour :
+
+| Fichier | Rôle |
+|---------|------|
+| `.env.example` | Modèle des variables d'environnement requises (`API_KEY_alpha`, `API_KEY_NEWS`, `FAO_USERNAME`, `FAO_PASSWORD`) |
+| `Dockerfile` | Image Docker pour exécution isolée du pipeline (voir section 6) |
+| `.dockerignore` | Exclusion de `.env`, `data/`, `logs/`, `.git/`, `__pycache__/` du build Docker |
+
+📌 Avant de cloner et lancer le projet : `cp .env.example .env` puis renseigner les vraies valeurs (voir section 4).
 - `__pycache__/` → fichiers `.pyc` compilés, régénérés automatiquement, à exclure de toute image ou dépôt.
