@@ -1,8 +1,6 @@
 import boto3, time
 from botocore.exceptions import ClientError, BotoCoreError
-
-COGNITO_CLIENT_ID = "2csltsigao85ivhp6ojp1aic7o"
-COGNITO_REGION = "eu-west-1"
+from config.config import get_cognito_client_id, COGNITO_REGION
 
 class TokenManager:
    def __init__(self, username: str, password: str):
@@ -20,7 +18,7 @@ class TokenManager:
    def _refresh(self) -> None:
       try:
          response = self.client.initiate_auth(
-            ClientId=COGNITO_CLIENT_ID,
+            ClientId=get_cognito_client_id(),
             AuthFlow="USER_PASSWORD_AUTH",
             AuthParameters={
                "USERNAME": self.username,

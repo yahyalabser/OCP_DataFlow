@@ -3,13 +3,48 @@ import os
 
 load_dotenv()
 
-API_KEY_NEWS = os.getenv("API_KEY_NEWS")
-API_KEY_alpha = os.getenv("API_KEY_alpha")
-FAO_USERNAME = os.getenv("FAO_USERNAME")
-FAO_PASSWORD = os.getenv("FAO_PASSWORD")
+class MissingEnvVar(Exception):
+   """Levée uniquement quand une variable manquante est réellement utilisée."""
+   pass
 
-DB_USER = os.getenv("POSTGRES_USER")
-DB_PASSWORD = os.getenv("POSTGRES_PASSWORD")
-DB_NAME = os.getenv("POSTGRES_DB")
-DB_HOST = os.getenv("POSTGRES_HOST", "localhost")
-DB_PORT = os.getenv("POSTGRES_PORT", "5432")
+class _LazyEnv:
+   """Accès aux variables d'env avec validation différée (au premier usage réel)."""
+   def __init__(self):
+     self._cache = {}
+
+   def get(self, name, default=None, required=True):
+      if name in self._cache:
+         return self._cache[name]
+      value = os.getenv(name, default)
+      if required and not value:
+         raise MissingEnvVar(
+               f"Variable d'environnement manquante : {name}. "
+               f"Vérifie ton fichier .env."
+         )
+      self._cache[name] = value
+      return value
+
+_env = _LazyEnv()
+
+def get_api_key_news():
+   return _env.get("API_KEY_NEWS")
+
+def get_api_key_alpha():
+   return _env.get("API_KEY_alpha")
+
+def get_fao_credentials():
+   return _env.get("FAO_USERNAME"), _env.get("FAO_PASSWORD")
+
+def get_cognito_client_id():
+   return _env.get("COGNITO_CLIENT_ID")
+
+COGNITO_REGION = os.getenv("COGNITO_REGION", "eu-west-1")
+
+def get_db_config():
+   return {
+      "user": _env.get("POSTGRES_USER"),
+      "password": _env.get("POSTGRES_PASSWORD"),
+      "dbname": _env.get("POSTGRES_DB"),
+     "host": _env.get("POSTGRES_HOST", "localhost", required=False),
+     "port": _env.get("POSTGRES_PORT", "5432", required=False),
+   }
