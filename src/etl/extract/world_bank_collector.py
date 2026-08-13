@@ -1,8 +1,8 @@
 from io import BytesIO
 import pandas as pd
 from logger_config import get_logger
-from config.settings import URL_world_bank, output_dir_world_bank
-from etl.extract.extract_base import BaseCollector
+from src.config.settings import URL_world_bank, output_dir_world_bank
+from src.etl.extract.extract_base import BaseCollector
 from datetime import datetime, timezone
 
 class WorldBankCollector(BaseCollector):

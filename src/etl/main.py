@@ -1,24 +1,20 @@
 import pandera.pandas as pa
-from etl.quality_checks import validate
-from logger_config import get_logger
+from src.etl.quality_checks import validate
+from src.logger_config import get_logger
 
-from etl.extract.alpha_vantage_collector import AlphaVantageCollector
-from etl.extract.world_bank_collector import WorldBankCollector
-from etl.extract.ocp_financials import OCPFinancialsCollector
-from etl.extract.ffpi_collector import FFPICollector
-from etl.extract.news_collector import NewsCollector
-from etl.extract.fao_collector import FAOCollector
-from etl.load.load_dimensions import load_dimensions
-from etl.load.load_facts import load_facts
+from src.etl.extract.alpha_vantage_collector import AlphaVantageCollector
+from src.etl.extract.world_bank_collector import WorldBankCollector
+from src.etl.extract.ocp_financials import OCPFinancialsCollector
+from src.etl.extract.ffpi_collector import FFPICollector
+from src.etl.extract.news_collector import NewsCollector
+from src.etl.extract.fao_collector import FAOCollector
+from src.etl.load.load_dimensions import load_dimensions
+from src.etl.load.load_facts import load_facts
 
-from etl.transform import (
-   transform_ocp,
-   transform_alpha,
-   transform_worldbank,
-   transform_fao,
-   transform_ffpi,
-   transform_news
+from src.etl.transform import (
+   transform_worldbank
 )
+from src.etl.transform import transform_alpha, transform_fao, transform_ffpi, transform_news, transform_ocp
 
 PIPELINE = [
    ("AlphaVantageCollector", AlphaVantageCollector, transform_alpha, None),

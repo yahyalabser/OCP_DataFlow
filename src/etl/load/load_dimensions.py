@@ -1,7 +1,7 @@
-from config.db_config import get_engine
+from src.config.db_config import get_engine
 from logger_config import get_logger
-from etl.load.db_writer import upsert
-from etl.load.generate_dim_date import generate_dim_date
+from src.etl.load.db_writer import upsert
+from src.etl.load.generate_dim_date import generate_dim_date
 
 logger = get_logger("load_dimensions")
 

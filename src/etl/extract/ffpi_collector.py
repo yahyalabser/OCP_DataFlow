@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from logger_config import get_logger
-from config.settings import URL_ffpi, output_dir_ffpi
-from etl.extract.extract_base import BaseCollector
+from src.config.settings import URL_ffpi, output_dir_ffpi
+from src.etl.extract.extract_base import BaseCollector
 
 class FFPICollector(BaseCollector):
    def __init__(self):

@@ -1,9 +1,9 @@
 import time
 from datetime import datetime, timezone
 from logger_config import get_logger
-from config.config import get_api_key_alpha
-from config.settings import URL_alpha, output_dir_alpha
-from etl.extract.extract_base import BaseCollector
+from src.config.config import get_api_key_alpha
+from src.config.settings import URL_alpha, output_dir_alpha
+from src.etl.extract.extract_base import BaseCollector
 
 class AlphaVantageCollector(BaseCollector):
    def __init__(self):

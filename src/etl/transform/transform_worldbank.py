@@ -1,7 +1,7 @@
 import re
 import pandas as pd
 from pathlib import Path
-from config.settings import output_dir_world_bank
+from src.config.settings import output_dir_world_bank
 
 _DATE_PATTERN = re.compile(r"^\d{4}M\d{2}$")
 

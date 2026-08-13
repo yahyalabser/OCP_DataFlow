@@ -1,6 +1,6 @@
 import pandas as pd
 from pathlib import Path
-from config.settings import output_dir_ffpi
+from src.config.settings import output_dir_ffpi
 
 def clean(df: pd.DataFrame) -> pd.DataFrame:
    df = df.dropna(axis=1, how="all")

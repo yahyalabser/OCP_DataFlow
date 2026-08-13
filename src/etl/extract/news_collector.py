@@ -1,9 +1,9 @@
 import time
 from logger_config import get_logger
-from config.config import get_api_key_news
-from config.settings import URL_news, output_dir_news
-from etl.extract.extract_base import BaseCollector
-from etl.extract.state import get_last_success, set_last_success
+from src.config.config import get_api_key_news
+from src.config.settings import URL_news, output_dir_news
+from src.etl.extract.extract_base import BaseCollector
+from src.etl.extract.state import get_last_success, set_last_success
 from datetime import datetime, timedelta, timezone
 
 class NewsCollector(BaseCollector):

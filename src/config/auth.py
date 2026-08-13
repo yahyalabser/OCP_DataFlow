@@ -1,6 +1,6 @@
 import boto3, time
 from botocore.exceptions import ClientError, BotoCoreError
-from config.config import get_cognito_client_id, COGNITO_REGION
+from src.config.config import get_cognito_client_id, COGNITO_REGION
 
 class TokenManager:
    def __init__(self, username: str, password: str):

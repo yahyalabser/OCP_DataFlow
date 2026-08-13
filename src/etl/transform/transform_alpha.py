@@ -1,6 +1,6 @@
 import glob, os
 import pandas as pd
-from config.settings import output_dir_alpha
+from src.config.settings import output_dir_alpha
 from .io_utils import load_json
 
 def clean(df: pd.DataFrame) -> pd.DataFrame:

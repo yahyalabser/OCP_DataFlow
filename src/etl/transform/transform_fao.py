@@ -1,5 +1,5 @@
 import pandas as pd
-from config.settings import output_dir_fao
+from src.config.settings import output_dir_fao
 from .io_utils import load_json
 from pathlib import Path
 

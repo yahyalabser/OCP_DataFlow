@@ -1,7 +1,7 @@
 import os, json
 from logger_config import get_logger
-from config.settings import config_path_ocpfinancials, output_dir_ocpfinancials
-from etl.extract.extract_base import BaseCollector
+from src.config.settings import config_path_ocpfinancials, output_dir_ocpfinancials
+from src.etl.extract.extract_base import BaseCollector
 
 class OCPFinancialsCollector(BaseCollector):
 

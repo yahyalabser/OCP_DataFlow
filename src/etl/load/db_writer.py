@@ -2,7 +2,7 @@ import pandas as pd
 from sqlalchemy import Table, MetaData
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Engine
-from logger_config import get_logger
+from src.logger_config import get_logger
 
 logger = get_logger("db_writer")
 

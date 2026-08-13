@@ -1,6 +1,6 @@
 import pandas as pd
 from pathlib import Path
-from config.settings import output_dir_ocpfinancials
+from src.config.settings import output_dir_ocpfinancials
 from .io_utils import load_json
 
 def clean(df: pd.DataFrame) -> pd.DataFrame:

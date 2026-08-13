@@ -1,7 +1,7 @@
 import re
 import pandas as pd
 from pathlib import Path
-from config.settings import output_dir_news
+from src.config.settings import output_dir_news
 from .io_utils import load_json
 
 def _clean_text(text: str) -> str:

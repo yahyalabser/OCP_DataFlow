@@ -1,6 +1,6 @@
 from sqlalchemy import create_engine
 from sqlalchemy.engine import URL
-from config.config import get_db_config
+from src.config.config import get_db_config
 
 _engine = None
 

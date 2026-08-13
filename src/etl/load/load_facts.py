@@ -1,6 +1,6 @@
 from logger_config import get_logger
-from config.db_config import get_engine
-from etl.load.db_writer import upsert
+from src.config.db_config import get_engine
+from src.etl.load.db_writer import upsert
 
 logger = get_logger("load_facts")
 
