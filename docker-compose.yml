@@ -28,6 +28,8 @@ services:
       LOG_DIR: /app/logs
     volumes:
       - ./logs:/app/logs
+      - ./data:/app/data
+      - ./src/etl/extract/etl_state.json:/app/src/etl/extract/etl_state.json
     depends_on:
       postgres:
         condition: service_healthy
