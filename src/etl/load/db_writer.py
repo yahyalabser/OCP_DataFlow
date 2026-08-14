@@ -24,6 +24,7 @@ def upsert(engine: Engine, df: pd.DataFrame, table_name: str, unique_cols: list[
 
    protected_cols = set(protected_cols or [])
    table = _get_table(engine, table_name)
+   df = df.where(pd.notnull(df), None)
    records = df.to_dict(orient="records")
 
    with engine.begin() as conn:

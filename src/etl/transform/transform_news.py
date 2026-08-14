@@ -4,6 +4,16 @@ from pathlib import Path
 from src.config.settings import output_dir_news
 from .io_utils import load_json
 
+_EMPTY_TABLES = {
+   "FactNews": pd.DataFrame(columns=[
+      "url", "source_name", "title", "author", "content",
+      "published_at", "full_date"
+   ]),
+   "BridgeArticleKeyword": pd.DataFrame(columns=["url", "keyword"]),
+   "DimNewsSource": pd.DataFrame(columns=["source_name"]),
+   "DimKeyword": pd.DataFrame(columns=["keyword"]),
+}
+
 def _clean_text(text: str) -> str:
    if not isinstance(text, str):
       return text
@@ -28,7 +38,7 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
 
    return df
 
-def transform(df : pd.DataFrame) -> pd.DataFrame:
+def transform(df : pd.DataFrame) -> dict:
    bridge_df = df[["url", "keyword"]].drop_duplicates().reset_index(drop=True)
    news_df = df.drop_duplicates(subset=["url"], keep="first").drop(columns=["keyword"])
    dim_news_source = df[["source_name"]].drop_duplicates().reset_index(drop=True)
@@ -40,7 +50,7 @@ def transform(df : pd.DataFrame) -> pd.DataFrame:
       "DimKeyword" : dim_keyword
    }
 
-def run() -> pd.DataFrame:
+def run() -> dict:
    filepath = Path(output_dir_news) / "news_latest.json"
    if not filepath.exists():
       raise FileNotFoundError(f"Aucune donnée News trouvée dans {filepath}")
@@ -53,7 +63,7 @@ def run() -> pd.DataFrame:
          continue
       for article in articles:
          if not article.get("url") or not article.get("publishedAt"):
-            continue  # champs indispensables absents, article ignoré
+            continue 
 
          source = article.get("source") or {}
          all_rows.append({
@@ -65,6 +75,9 @@ def run() -> pd.DataFrame:
             "author": article.get("author"),
             "content": article.get("content"),
          })
+
+   if not all_rows:
+      return _EMPTY_TABLES
 
    df = pd.DataFrame(all_rows)
    df = clean(df)

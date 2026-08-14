@@ -1,4 +1,5 @@
 import time
+from datetime import date
 from src.logger_config import get_logger
 from src.config.auth import TokenManager
 from src.config.settings import URL_fao, output_dir_fao
@@ -31,7 +32,8 @@ class FAOCollector(BaseCollector):
          "Sunflower": 267
       }
 
-      self.years = range(2020, 2025)
+      current_year = date.today().year
+      self.years = range(current_year - 5, current_year)
       self.element = 2510
       self.request_delay = 1
 

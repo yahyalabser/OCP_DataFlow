@@ -15,11 +15,14 @@ class NewsCollector(BaseCollector):
       self.api_key = get_api_key_news()
       self.keywords = ['OCP Group OR "OCP Morocco"', "phosphate", "fertilizer", "agriculture AND fertilizer", 'Mosaic OR Nutrien OR Yara OR "CF Industries" OR "ICL Group"']
 
-   def _compute_days_back(self, floor: int = 2) -> int:
-      last_ok = get_last_success(self.SOURCE_NAME)
+   def _state_key(self, keyword: str) -> str:
+      return f"{self.SOURCE_NAME}:{keyword}"
+
+   def _compute_days_back(self, keyword: str, floor: int = 2) -> int:
+      last_ok = get_last_success(self._state_key(keyword))
       if last_ok is None:
          self.logger.warning(
-            f"Aucun run réussi connu pour '{self.SOURCE_NAME}', "
+            f"Aucun run réussi connu pour le mot-clé '{keyword}', "
             f"fenêtre max ({self.MAX_DAYS_BACK}j) utilisée par précaution."
          )
          return self.MAX_DAYS_BACK
@@ -27,7 +30,7 @@ class NewsCollector(BaseCollector):
       days_back = min(max(days_since, floor), self.MAX_DAYS_BACK)
       if days_since > self.MAX_DAYS_BACK:
          self.logger.warning(
-            f"Dernier run réussi il y a {days_since}j, plafonné à {self.MAX_DAYS_BACK}j "
+            f"Dernier run réussi pour '{keyword}' il y a {days_since}j, plafonné à {self.MAX_DAYS_BACK}j "
             f"— des articles plus anciens peuvent être manqués."
          )
       return days_back
@@ -79,24 +82,28 @@ class NewsCollector(BaseCollector):
       return all_articles or None
 
    def collect(self) -> None:
-      days_back = self._compute_days_back()
-      self.logger.info(f"Collecte news sur {days_back} jour(s) glissants")
-
       all_news = {}
       any_success = False
+
       for keyw in self.keywords:
+         days_back = self._compute_days_back(keyw)
+         self.logger.info(f"Collecte news pour '{keyw}' sur {days_back} jour(s) glissants")
+
          result = self.collect_keyword(keyw, days_back)
          all_news[keyw] = result or []
+
          if result is not None:
             any_success = True
+            set_last_success(self._state_key(keyw))
+         else:
+            self.logger.warning(f"Échec pour '{keyw}', fenêtre non avancée pour ce mot-clé.")
+
          time.sleep(1)
 
       self.save(all_news)
 
-      if any_success:
-         set_last_success(self.SOURCE_NAME)
-      else:
-         self.logger.error("Aucun mot-clé n'a réussi, 'last_success' non mis à jour.")
+      if not any_success:
+         self.logger.error("Aucun mot-clé n'a réussi sur ce run.")
 
    def save(self, data: dict) -> None:
       timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")

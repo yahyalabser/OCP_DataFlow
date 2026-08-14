@@ -26,10 +26,10 @@ PIPELINE = [
 ]
 
 
-def _run_source(name, CollectorClass, transformer, table_name, transformed_data, logger) -> bool:
+def _run_source(name, CollectorClass, transformer, table_name, transformed_data, logger) -> str:
    """Exécute collect -> transform -> validate pour une source.
-   Retourne True en cas de succès, False sinon. Chaque étape logue
-   précisément où ça a échoué pour faciliter le debug en prod."""
+   Retourne "success", "partial" (au moins une table exclue) ou "failed".
+   Chaque étape logue précisément où ça a échoué pour faciliter le debug en prod."""
 
    # --- Étape 1 : collecte ---
    try:
@@ -37,22 +37,19 @@ def _run_source(name, CollectorClass, transformer, table_name, transformed_data,
       collector.collect()
    except Exception as e:
       logger.error(f"[{name}] Échec à l'étape 'collect' : {e}", exc_info=True)
-      return False
+      return "failed"
 
    # --- Étape 2 : transformation ---
    try:
       output = transformer.run()
    except FileNotFoundError as e:
       logger.error(f"[{name}] Échec à l'étape 'transform' (fichier source introuvable) : {e}", exc_info=True)
-      return False
+      return "failed"
    except Exception as e:
       logger.error(f"[{name}] Échec à l'étape 'transform' : {e}", exc_info=True)
-      return False
+      return "failed"
 
    # --- Étape 3 : validation ---
-   # Chaque table est validée indépendamment : si une table échoue, elle est
-   # exclue mais les autres tables valides de la même source sont quand même
-   # conservées et chargées.
    tables = output if isinstance(output, dict) else {table_name: output}
 
    validated_tables = []
@@ -80,41 +77,37 @@ def _run_source(name, CollectorClass, transformer, table_name, transformed_data,
          failed_tables.append(key)
 
    if failed_tables and not validated_tables:
-      # Aucune table de la source n'a pu être validée : la source est un échec complet.
-      return False
+      return "failed"
 
    if failed_tables:
       logger.warning(
          f"[{name}] Terminé partiellement : {', '.join(validated_tables)} validée(s), "
          f"{', '.join(failed_tables)} exclue(s)"
       )
-      # Succès partiel : on considère la source comme un succès puisqu'au moins
-      # une table a pu être chargée, mais on le distingue dans les logs ci-dessus.
-      return True
+      return "partial"
 
    logger.info(f"[{name}] Terminé avec succès ({', '.join(validated_tables)})")
-   return True
+   return "success"
 
 
 def run_pipeline(logger=None) -> dict:
    logger = logger or get_logger("run_pipeline")
-   results = {"success": [], "failed": []}
+   results = {"success": [], "partial": [], "failed": []}
    transformed_data = {}
 
    for name, CollectorClass, transformer, table_name in PIPELINE:
       logger.info(f"--- Démarrage : {name} ---")
 
-      ok = _run_source(name, CollectorClass, transformer, table_name, transformed_data, logger)
-
-      if ok:
-         results["success"].append(name)
-      else:
-         results["failed"].append(name)
+      status = _run_source(name, CollectorClass, transformer, table_name, transformed_data, logger)
+      results[status].append(name)
 
    dim_results = load_dimensions(transformed_data)
    fact_results = load_facts(transformed_data)
 
-   logger.info(f"Terminé. Succès : {results['success']} | Échecs : {results['failed']}")
+   logger.info(
+      f"Terminé. Succès : {results['success']} | "
+      f"Partiels : {results['partial']} | Échecs : {results['failed']}"
+   )
    logger.info(f"Dimensions -> Succès : {dim_results['success']} | Échecs : {dim_results['failed']}")
    logger.info(f"Faits -> Succès : {fact_results['success']} | Échecs : {fact_results['failed']}")
 
