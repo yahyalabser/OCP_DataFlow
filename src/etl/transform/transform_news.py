@@ -52,10 +52,14 @@ def run() -> pd.DataFrame:
       if not articles:
          continue
       for article in articles:
+         if not article.get("url") or not article.get("publishedAt"):
+            continue  # champs indispensables absents, article ignoré
+
+         source = article.get("source") or {}
          all_rows.append({
             "keyword": keyword,
             "date": article["publishedAt"],
-            "source_name": article["source"]["name"],
+            "source_name": source.get("name") or "Unknown",
             "url": article["url"],
             "title": article.get("title"),
             "author": article.get("author"),

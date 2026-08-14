@@ -1,5 +1,5 @@
 import time
-from logger_config import get_logger
+from src.logger_config import get_logger
 from src.config.auth import TokenManager
 from src.config.settings import URL_fao, output_dir_fao
 from src.config.config import get_fao_credentials

@@ -1,23 +1,25 @@
-from logger_config import get_logger
+from src.logger_config import get_logger
 from src.config.db_config import get_engine
 from src.etl.load.db_writer import upsert
 
 logger = get_logger("load_facts")
 
-FACT_KEYS = {
-   "FactStockPrices": ["symbol", "full_date"],
-   "FactCropProduction": ["full_date", "country_code", "crop_code", "element_code"],
-   "FactFoodPriceIndex": ["full_date"],
-   "FactOCPFinancials": ["quarter_label"],
-   "FactNews": ["url"],
-   "BridgeArticleKeyword": ["url", "keyword"],
-   "FactCommodityPrices": ["full_date", "commodity_name"],
-}
+# ⚠️ L'ORDRE COMPTE : FactNews doit être chargé avant BridgeArticleKeyword
+# car cette dernière référence FactNews.url par contrainte FK.
+FACT_KEYS = [
+   ("FactStockPrices", ["symbol", "full_date"]),
+   ("FactCropProduction", ["full_date", "country_code", "crop_code", "element_code"]),
+   ("FactFoodPriceIndex", ["full_date"]),
+   ("FactOCPFinancials", ["quarter_label"]),
+   ("FactNews", ["url"]),
+   ("BridgeArticleKeyword", ["url", "keyword"]),  # doit rester après FactNews
+   ("FactCommodityPrices", ["full_date", "commodity_name"]),
+]
 
 def load_facts(transformed_data: dict) -> dict:
    results = {"success": [], "failed": []}
 
-   for table_name, unique_cols in FACT_KEYS.items():
+   for table_name, unique_cols in FACT_KEYS:
       df = transformed_data.get(table_name)
       if df is None:
          logger.warning(f"Pas de données pour la table de faits {table_name}")

@@ -1,5 +1,5 @@
 from src.config.db_config import get_engine
-from logger_config import get_logger
+from src.logger_config import get_logger
 from src.etl.load.db_writer import upsert
 from src.etl.load.generate_dim_date import generate_dim_date
 
