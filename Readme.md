@@ -1,6 +1,7 @@
-# 📦 Data Collectors — Pipeline de collecte de données agricoles & financières
+# 📦 OCP DataFlow — Pipeline ETL de collecte de données agricoles & financières
 
-Ce projet regroupe **6 collectors** chargés de récupérer automatiquement des données provenant de sources publiques (API, fichiers, config internes) : marchés financiers, production agricole, indices alimentaires, prix des matières premières, actualités et résultats financiers d'OCP.
+Ce projet regroupe **6 collectors** chargés de récupérer automatiquement des données provenant de sources publiques (API, fichiers, config internes) : marchés financiers, production agricole, indices alimentaires, prix des matières premières, actualités et résultats financiers d'OCP. Les données sont ensuite **transformées**, **validées** (Pandera) et 
+**chargées** dans un schéma en étoile PostgreSQL.
 
 ---
 
@@ -8,34 +9,66 @@ Ce projet regroupe **6 collectors** chargés de récupérer automatiquement des 
 
 ```
 .
-├── collectors/
-│   ├── base_collector.py          # Classe abstraite commune à tous les collectors
-│   ├── alpha_vantage_collector.py # Marchés financiers (actions)
-│   ├── fao_collector.py           # Production agricole (FAOSTAT)
-│   ├── ffpi_collector.py          # FAO Food Price Index
-│   ├── world_bank_collector.py    # Prix des matières premières (World Bank)
-│   ├── news_collector.py          # Actualités (NewsAPI)
-│   └── ocp_financials.py          # Résultats financiers OCP (config locale)
+├── src/
+│   ├── config/
+│   │   ├── config.py                  # Clés API / tokens (via .env)
+│   │   ├── auth.py                    # TokenManager — authentification Cognito (FAO)
+│   │   ├── settings.py                # URLs et dossiers de sortie
+│   │   ├── db_config.py               # Création de l'engine SQLAlchemy
+│   │   └── ocp_financials.json        # Données trimestrielles OCP (source manuelle)
+│   │
+│   ├── etl/
+│   │   ├── extract/
+│   │   │   ├── extract_base.py        # Classe abstraite BaseCollector
+│   │   │   ├── alpha_vantage_collector.py
+│   │   │   ├── fao_collector.py
+│   │   │   ├── ffpi_collector.py
+│   │   │   ├── world_bank_collector.py
+│   │   │   ├── news_collector.py
+│   │   │   ├── ocp_financials.py
+│   │   │   ├── state.py               # Suivi du dernier run réussi (last_success)
+│   │   │   └── etl_state.json         # État persistant (par source)
+│   │   │
+│   │   ├── transform/
+│   │   │   ├── io_utils.py
+│   │   │   ├── transform_alpha.py
+│   │   │   ├── transform_fao.py
+│   │   │   ├── transform_ffpi.py
+│   │   │   ├── transform_worldbank.py
+│   │   │   ├── transform_news.py
+│   │   │   └── transform_ocp.py
+│   │   │
+│   │   ├── load/
+│   │   │   ├── db_writer.py           # upsert() générique (SQLAlchemy)
+│   │   │   ├── load_dimensions.py
+│   │   │   ├── load_facts.py
+│   │   │   └── generate_dim_date.py
+│   │   │
+│   │   ├── quality_checks.py          # Schémas Pandera par table
+│   │   └── main.py                    # Orchestration collect -> transform -> validate -> load
+│   │
+│   ├── logger_config.py               # Configuration du logging
+│   └── run_etl.py                     # Point d'entrée (exécuté par le Dockerfile)
 │
-├── config/
-│   ├── config.py                  # Clés API / tokens (via .env)
-│   ├── auth.py                    # Logique d'authentification (à détailler)
-│   ├── settings.py                # URLs et dossiers de sortie
-│   └── ocp_financials.json        # Données trimestrielles OCP (source manuelle)
+├── database/
+│   └── schema.sql                     # Schéma PostgreSQL (schéma ocp_dataflow)
 │
-├── logger_config.py               # Configuration du logging
-├── run_collectors.py              # Script principal d'exécution
 ├── requirements.txt
-├── Dockerfile                      # Image Docker pour exécution isolée
-├── .env.example                    # Modèle des variables d'environnement requises
-└── data/raw/...                   # Données collectées (générées à l'exécution)
+├── Dockerfile
+├── docker-compose.yml
+├── .env.example                       # Modèle des variables d'environnement requises
+├── .dockerignore
+├── .gitignore
+└── data/raw/...                       # Données collectées (générées à l'exécution)
 ```
+
+> ⚠️ Tout le code applicatif vit sous `src/` et s'importe en tant que **paquet Python** (`from src.xxx import ...`), aussi bien en local qu'en Docker. C'est ce point précis qui a changé récemment (voir Changelog) — veillez à ne pas réintroduire d'imports « plats » type `from logger_config import ...`.
 
 ---
 
 ## 🧱 1. `BaseCollector` — la classe de base
 
-Toutes les collectors héritent de `BaseCollector` (classe abstraite, module `abc`).
+Toutes les collectors héritent de `BaseCollector` (`src/etl/extract/extract_base.py`, classe abstraite `abc`).
 
 **Constructeur** — initialise les attributs communs :
 
@@ -47,672 +80,288 @@ Toutes les collectors héritent de `BaseCollector` (classe abstraite, module `ab
 | `timeout`     | Timeout HTTP (défaut : 15s)                           |
 | `max_retries` | Nombre de tentatives en cas d'échec (défaut : 3)      |
 
-**Méthodes :**
+**Méthodes principales :**
 
 - **`_request_with_retry(url=None, **kwargs)`**
-  Envoie une requête HTTP via `requests`, avec gestion des erreurs (`Timeout`, `HTTPError`, `RequestException`) et un mécanisme de **retry automatique** (jusqu'à `max_retries` tentatives, avec backoff exponentiel `2**attempt` entre chaque essai).
-  → Retourne l'objet `Response` en cas de succès, `None` en cas d'échec définitif.
+  Envoie une requête HTTP via `requests`, avec retry automatique sur erreurs serveur/réseau (backoff exponentiel `2**attempt`), et **sans retry** sur les erreurs client 4xx (401/403/404 — réessayer ne changerait rien). Retourne `Response` ou `None`.
 
-- **`_safe_json(response)`**
-  Convertit une réponse HTTP en JSON de façon sécurisée :
-  - `dict` → si le JSON est un objet
-  - `list` → si le JSON est un tableau
-  - `None` → si le contenu n'est pas un JSON valide
+- **`_safe_json(response, context="")`**
+  Parse la réponse en JSON de façon sécurisée, retourne `None` si invalide (avec log d'erreur contextualisé).
 
-- **`collect()`** et **`save()`** — méthodes abstraites, à implémenter dans chaque sous-classe.
+- **`_save_json` / `_save_bytes` / `_save_dated_and_latest`**
+  Sauvegarde des données en JSON ou binaire, avec double écriture (copie datée + copie `_latest` toujours écrasée) pour les sources qui en ont besoin.
+
+- **`collect()`** et **`save()`** — méthodes abstraites, implémentées dans chaque sous-classe.
 
 ---
 
 ## 🪵 2. Logging — `get_logger()`
 
-Le module `logging` (standard Python) remplace `print()` pour un suivi structuré de l'exécution : les logs peuvent être filtrés par niveau, écrits dans un fichier et affichés dans le terminal simultanément.
-
-**Niveaux (du moins au plus critique) :**
+`src/logger_config.py` configure un logger par source (`get_logger(name)`) :
+- crée `logs/` si besoin ;
+- handler **fichier tournant** (`RotatingFileHandler`, 5 Mo, 3 backups) + handler **console** ;
+- évite les doublons de handlers si appelé plusieurs fois pour le même nom.
 
 | Niveau     | Description                        | Exemple d'usage                          |
-|------------|-------------------------------------|-------------------------------------------|
-| `DEBUG`    | Détails internes                    | Valeurs de variables, pour le développeur |
-| `INFO`     | Fonctionnement normal                | Étapes importantes de l'exécution        |
-| `WARNING`  | Comportement inhabituel non bloquant | Le programme continue                    |
-| `ERROR`    | Une opération a échoué               | Requête échouée, JSON invalide           |
-| `CRITICAL` | Erreur grave, bloquante              | Le programme ne peut plus continuer      |
-
-`get_logger(name)` :
-- crée le dossier `logs/` s'il n'existe pas ;
-- configure un logger avec un handler **fichier** (`logs/{name}.log`) et un handler **console** ;
-- évite les doublons de handlers si la fonction est appelée plusieurs fois pour le même nom.
+|------------|-------------------------------------|--------------------------------------------|
+| `DEBUG`    | Détails internes                    | Valeurs de variables, pour le développeur  |
+| `INFO`     | Fonctionnement normal                | Étapes importantes de l'exécution         |
+| `WARNING`  | Comportement inhabituel non bloquant | Le programme continue                     |
+| `ERROR`    | Une opération a échoué               | Requête échouée, JSON invalide            |
+| `CRITICAL` | Erreur grave, bloquante              | Le programme ne peut plus continuer       |
 
 ---
 
-## 🤖 3. Les collectors
+## 🤖 3. Les collectors (`src/etl/extract/`)
 
 ### 3.1 `AlphaVantageCollector` — Marchés financiers
-
-Récupère les prix boursiers quotidiens via l'API [Alpha Vantage](https://www.alphavantage.co/).
-
-- **Symboles suivis** : `MOS`, `NTR`, `CF`, `ICL`, `YARIY` (acteurs du secteur des engrais/phosphates)
-- **Fonction API utilisée** : `TIME_SERIES_DAILY` (prix Open/High/Low/Close/Volume quotidiens, format `compact` = 100 derniers jours)
-
-**Fonctionnement :**
-1. `collect()` boucle sur chaque symbole et appelle `collect_symbol(symbol)`.
-2. `collect_symbol()` construit les paramètres (`function`, `symbol`, `outputsize`, `apikey`), envoie la requête via `_request_with_retry()`, puis vérifie la présence de clés d'erreur (`Note`, `Information`, `Error Message`) dans la réponse — Alpha Vantage renvoie ces clés en cas de dépassement de quota ou d'erreur, même avec un code HTTP 200.
-3. Si les données sont valides, `save()` est appelée ; sinon le symbole est ignoré.
-4. **`time.sleep(12)` entre chaque symbole** : le plan gratuit d'Alpha Vantage limite les requêtes à **5 par minute**, soit une requête toutes les 12 secondes — ce délai évite de dépasser le quota.
-
-**Sauvegarde (`save()`) :**
-- `data/raw/alpha_vantage/{symbol}_{AAAA-MM-JJ}.json` → archive datée (historique)
-- `data/raw/alpha_vantage/{symbol}_latest.json` → copie toujours écrasée, pratique pour que les étapes suivantes du pipeline lisent toujours la donnée la plus récente sans se soucier de la date
-
-**Autres paramètres Alpha Vantage disponibles** (non utilisés ici mais utiles à connaître) :
-
-| Paramètre   | Description                          |
-|-------------|----------------------------------------|
-| `function`  | Type de données demandé (voir ci-dessous) |
-| `symbol`    | Symbole boursier (`AAPL`, `TSLA`...)  |
-| `interval`  | Intervalle pour l'intraday (`5min`...) |
-| `outputsize`| `compact` (100 pts) ou `full`         |
-| `datatype`  | `json` ou `csv`                      |
-| `apikey`    | Clé d'API                            |
-
-Fonctions notables : `TIME_SERIES_INTRADAY`, `TIME_SERIES_WEEKLY`, `TIME_SERIES_MONTHLY`, `FX_DAILY` (forex), `DIGITAL_CURRENCY_DAILY` (crypto), indicateurs techniques (`RSI`, `MACD`, `SMA`), données macro (inflation, PIB, chômage).
-
-#### 📡 L'API en détail
-
-[Alpha Vantage](https://www.alphavantage.co/) est une API REST gratuite (avec offre payante) qui donne accès à des données de marché en JSON ou CSV. C'est une API **sans authentification OAuth** : une simple clé (`apikey`) suffit, passée en paramètre de requête (query string), pas en en-tête.
-
-- **Authentification** : clé API gratuite obtenue par simple inscription sur le site.
-- **Limites du plan gratuit** : 25 requêtes/jour et 5 requêtes/minute — d'où le `sleep(12)` entre chaque symbole dans le code.
-- **Format de requête** : `GET https://www.alphavantage.co/query?function=...&symbol=...&apikey=...`
-- **Particularité importante** : Alpha Vantage renvoie toujours un code HTTP `200`, même en cas d'erreur ou de quota dépassé — l'erreur est indiquée **dans le corps JSON** via les clés `"Note"`, `"Information"` ou `"Error Message"`. C'est pourquoi le collector doit explicitement vérifier ces clés (`_request_with_retry()` seul ne suffit pas à détecter ce type d'échec).
-
-#### 📦 Données retournées (exemple `TIME_SERIES_DAILY`)
-
-```json
-{
-  "Meta Data": {
-    "1. Information": "Daily Prices (open, high, low, close) and Volumes",
-    "2. Symbol": "MOS",
-    "3. Last Refreshed": "2026-07-21",
-    "4. Output Size": "Compact",
-    "5. Time Zone": "US/Eastern"
-  },
-  "Time Series (Daily)": {
-    "2026-07-21": {
-      "1. open": "28.50",
-      "2. high": "29.10",
-      "3. low": "28.20",
-      "4. close": "28.95",
-      "5. volume": "3456789"
-    },
-    "2026-07-20": {
-      "1. open": "28.10",
-      "2. high": "28.60",
-      "3. low": "27.90",
-      "4. close": "28.40",
-      "5. volume": "2987654"
-    }
-  }
-}
-```
-
-- `Meta Data` : informations sur la requête (symbole, date de dernière mise à jour, fuseau horaire).
-- `Time Series (Daily)` : dictionnaire dont chaque clé est une date (`AAAA-MM-JJ`) et chaque valeur un objet OHLCV (Open/High/Low/Close/Volume) pour ce jour-là. En mode `compact`, environ 100 dernières séances sont renvoyées.
-
-#### 🎓 Comprendre le sens de ces données (avant de les mettre en base)
-
-Alpha Vantage renvoie **le prix d'une action**, pas la valeur de toute l'entreprise. Il est important de bien saisir cette nuance avant de concevoir le schéma SQL, car ça détermine ce que représente réellement une ligne de `fact_prices`.
-
-- **Une action** = une petite part de la propriété d'une entreprise (une entreprise découpée en, disons, 1 000 000 d'actions ; posséder 1 action = posséder une infime part de l'entreprise).
-- **Pourquoi une entreprise émet des actions** : pour lever des fonds (investir, construire, croître) sans emprunter uniquement à une banque.
-- **Pourquoi le prix change** : il reflète l'équilibre offre/demande entre acheteurs et vendeurs, influencé par les résultats financiers, les actualités, le contexte économique et les attentes des investisseurs — le prix reflète donc **la perception du marché**, pas une mesure comptable directe.
-- **OHLCV** :
-
-| Lettre | Signification |
-|--------|----------------|
-| O | Open — prix d'ouverture d'une action |
-| H | High — prix maximum atteint sur la période |
-| L | Low — prix minimum atteint sur la période |
-| C | Close — prix de clôture d'une action |
-| V | Volume — nombre d'actions échangées sur la période |
-
-- **Valeur totale de l'entreprise (capitalisation boursière)**, si besoin un jour : `Prix d'une action × Nombre total d'actions`. Ce n'est **pas** ce que retourne directement Alpha Vantage — seulement le prix unitaire.
-- **Dans OCP DataFlow, ces données ne servent pas au trading** : elles sont utilisées comme **indicateur de la confiance du marché** envers les concurrents cotés d'OCP (si `MOS` passe de 34$ à 38$, le marché est plus optimiste sur Mosaic — cela ne prouve pas que Mosaic a gagné plus d'argent ce jour-là). Cet indicateur est ensuite combiné avec les news, les données FAO/World Bank et les résultats OCP pour l'analyse globale.
-
-| Symbole | Entreprise | Pourquoi suivie |
-|---------|-------------|------------------|
-| `MOS` | The Mosaic Company | Concurrent d'OCP sur les phosphates |
-| `NTR` | Nutrien | Leader mondial des engrais |
-| `CF` | CF Industries | Producteur d'engrais azotés |
-| `ICL` | ICL Group | Acteur majeur des engrais et minéraux |
-| `YARIY` | Yara International | Leader mondial des engrais |
-
----
+API [Alpha Vantage](https://www.alphavantage.co/), `TIME_SERIES_DAILY`, symboles `MOS`, `NTR`, `CF`, `ICL`, `YARIY`. Plan gratuit : 5 req/min → `sleep(12)` entre symboles. Erreurs de quota renvoyées en HTTP 200 (clés `Note`/`Information`/`Error Message` vérifiées explicitement).
+Sauvegarde : `data/raw/alpha_vantage/{symbol}_{date}.json` + `{symbol}_latest.json`.
 
 ### 3.2 `FAOCollector` — Production agricole (FAOSTAT)
-
-Récupère les données de production agricole via l'API [FAOSTAT](https://www.fao.org/faostat/) (dataset **QCL** — Crops and livestock products).
-
-- **Zones suivies** : Maroc, Brésil, Inde, Chine, USA, Canada, France, Argentine
-- **Cultures suivies** : Blé, Maïs, Riz, Soja, Orge, Colza, Tournesol
-- **Période** : 2020 à 2024
-- **Élément** : code `2510` (quantité produite)
-
-**Fonctionnement :**
-- Triple boucle imbriquée (zone × culture × année), soit `8 × 7 × 5 = 280` requêtes.
-- Pour chaque combinaison, envoi d'une requête avec `area`, `item`, `element`, `year` en paramètres et un token Bearer en en-tête.
-- `time.sleep(1)` entre chaque requête pour ménager l'API.
-- Toutes les données valides sont accumulées dans une liste unique, puis sauvegardées en une seule fois à la fin.
-
-**Sauvegarde :** `data/raw/fao/crop_production.json` (liste consolidée de tous les enregistrements).
-
-#### 📡 L'API en détail
-
-[FAOSTAT](https://www.fao.org/faostat/) est la base de données statistiques officielle de l'**Organisation des Nations Unies pour l'alimentation et l'agriculture**. Son API REST (`faostatservices.fao.org/api/v1`) donne accès à des dizaines de domaines statistiques (production, commerce, sécurité alimentaire, prix, émissions...), chacun identifié par un code (ex. `QCL` = *Crops and Livestock products*).
-
-- **Authentification** : token Bearer (en-tête `Authorization: Bearer <token>`), obtenu via **AWS Cognito** — voir `config/auth.py` (section 4) pour le détail du mécanisme de génération/rafraîchissement du token.
-- **Système de dimensions/filtres** : chaque domaine se filtre par plusieurs dimensions — `area` (zone géographique), `item` (produit), `element` (type de mesure : production, superficie récoltée, rendement...), `year`. Chaque dimension a ses propres codes numériques internes (ex. zone Maroc = `143`, Blé = `15`).
-- **Élément `2510`** utilisé ici correspond au code de mesure **"Production"** (quantité produite, en tonnes) — à ne pas confondre avec les codes d'affichage utilisés dans l'interface web, qui diffèrent des codes de filtre de l'API.
-- **Limitation** : l'API ne renvoie qu'une combinaison de filtres à la fois pour ce type d'appel, d'où la triple boucle du collector plutôt qu'une requête unique groupée.
-
-#### 📦 Données retournées (exemple)
-
-```json
-{
-  "data": [
-    {
-      "Area Code": 143,
-      "Area": "Morocco",
-      "Item Code": 15,
-      "Item": "Wheat",
-      "Element Code": 2510,
-      "Element": "Production",
-      "Year": 2023,
-      "Year Code": 2023,
-      "Unit": "t",
-      "Value": 3400000,
-      "Flag": "A",
-      "Flag Description": "Official figure"
-    }
-  ]
-}
-```
-
-- La clé `"data"` contient une **liste d'enregistrements**, un par combinaison zone/produit/année ayant une valeur disponible (une combinaison sans donnée renvoie une liste vide).
-- `Value` : la quantité produite, dans l'unité indiquée par `Unit` (tonnes ici).
-- `Flag` : qualifie la fiabilité/origine de la donnée (`A` = donnée officielle, `E` = estimation, etc.).
-
-#### 🔎 Comprendre le `element` (`2510`) — pourquoi ce code précis ?
-
-Le `self.element = 2510` utilisé dans `FAOCollector` **n'est ni une zone, ni une culture** : c'est un **Element Code**, la dimension FAOSTAT qui précise **quel type de donnée** on demande pour une culture donnée.
-
-Pour une même culture (le blé, par exemple), la FAO expose plusieurs types de mesures, chacune avec son propre code :
-
-| Élément          | Signification      |
-|------------------|----------------------|
-| Production       | Quantité produite    |
-| Area Harvested   | Surface récoltée     |
-| Yield            | Rendement             |
-| Imports          | Importations          |
-| Exports          | Exportations          |
-
-`2510` correspond précisément à **"Production"**. Une requête avec `area=143` (Maroc), `item=15` (Blé), `element=2510`, `year=2024` revient donc à demander : *"quelle quantité de blé le Maroc a-t-il produite en 2024 ?"*.
-
-Ce choix n'est pas arbitraire : l'objectif du collector est de suivre la **production agricole** (le volume de récolte), pas les surfaces cultivées ni les échanges commerciaux — c'est cette donnée qui est la plus pertinente pour estimer la demande potentielle en engrais.
-
----
+API [FAOSTAT](https://www.fao.org/faostat/) (dataset `QCL`), authentification Bearer via AWS Cognito (`TokenManager`, voir §4). Triple boucle zone × culture × année (8×7×5 = 280 requêtes), `sleep(1)` entre requêtes.
+Sauvegarde : `data/raw/fao/crop_production.json`.
 
 ### 3.3 `FFPICollector` — FAO Food Price Index
-
-Télécharge le fichier CSV de l'**indice FAO des prix alimentaires** (FFPI), publié mensuellement.
-
-**Fonctionnement :**
-- Requête simple (pas de paramètres), timeout étendu à 30s (fichier volumineux).
-- Vérification basique de l'intégrité de la réponse (`len(content) >= 100`) avant sauvegarde, pour éviter d'écraser les données avec une réponse vide ou corrompue.
-
-**Sauvegarde :**
-- `data/raw/ffpi/ffpi_{AAAA-MM}.csv` → une copie par mois (historique des publications)
-- `data/raw/ffpi/ffpi_latest.csv` → copie toujours à jour
-
-#### 📡 La source en détail
-
-Ce n'est pas une API à proprement parler mais un **fichier CSV statique** publié mensuellement par la FAO, à une URL fixe. Le **FFPI** (FAO Food Price Index) mesure l'évolution mensuelle des prix internationaux d'un panier de matières premières alimentaires, base 100 sur la période 2014-2016.
-
-- **Pas de clé API ni de paramètres** : simple téléchargement HTTP du fichier le plus récent.
-- **Fréquence de mise à jour** : mensuelle (généralement début de mois pour le mois précédent).
-- **Sous-indices** : l'indice global agrège 5 sous-indices sectoriels (céréales, huiles végétales, produits laitiers, viande, sucre), chacun pondéré par sa part dans le commerce international 2014-2016.
-
-#### 📦 Données retournées (structure du CSV)
-
-| Date       | Food Price Index | Meat | Dairy | Cereals | Oils | Sugar |
-|------------|-------------------|------|-------|---------|------|-------|
-| 2026-06    | 121.4             | 118.2| 125.6 | 119.8   | 130.1| 108.3 |
-| 2026-07    | 122.9             | 119.0| 126.9 | 121.0   | 131.5| 109.0 |
-
-- Chaque ligne = un mois, chaque colonne = l'indice global ou l'un des 5 sous-indices sectoriels.
-- Toutes les valeurs sont des **indices** (base 100 sur 2014-2016), pas des prix absolus en devise.
-
-#### 🔎 Ce que contient (et ne contient pas) le CSV
-
-Point important pour éviter toute confusion : **le CSV ne liste pas des aliments avec leur prix** (il ne contient pas de ligne "Blé — 250 $/tonne"). Chaque colonne est un **indice agrégé** pour toute une famille de produits :
-
-- `Cereals` : indice combiné du blé, maïs, riz, orge, etc. — pas un aliment unique.
-- `Meat`, `Dairy`, `Vegetable Oils`, `Sugar` : même principe, un indice par grande catégorie.
-- `Food Price Index` : l'indice **global**, une pondération des 5 sous-indices ci-dessus, qui résume en un seul chiffre la tendance générale des prix alimentaires mondiaux.
-
-Une analogie utile : `Food Price Index` joue le rôle d'une "température moyenne du pays", tandis que `Cereals`, `Meat`, etc. sont les "températures par ville" — le détail par catégorie derrière la moyenne globale.
-
-Comment lire une valeur : 100 = même niveau que la période de référence (2014-2016) ; 118 = prix environ 18 % plus élevés qu'à cette période ; 90 = prix environ 10 % plus bas. Une hausse du FFPI est utilisée dans ce projet comme signal indirect : des prix agricoles plus élevés peuvent améliorer les revenus des agriculteurs et, potentiellement, leur capacité à investir dans les engrais — un lien indicatif, pas une règle absolue.
-
-⚠️ Les noms exacts de colonnes peuvent légèrement varier d'une publication à l'autre (ex. `Vegetable Oils` vs `Oils`). Pour vérifier la structure réelle du fichier téléchargé : `pandas.read_csv(...).columns`.
-
----
+Téléchargement CSV mensuel statique. Détection **dynamique** du début des données (recherche de la première valeur de date valide en colonne A), pour ne pas dépendre d'un `skiprows` en dur si la mise en page FAO change.
+Sauvegarde : `data/raw/ffpi/ffpi_{AAAA-MM}.csv` + `ffpi_latest.csv`.
 
 ### 3.4 `WorldBankCollector` — Prix des matières premières
-
-Télécharge le fichier Excel officiel de la Banque Mondiale (**CMO Historical Data**) contenant l'historique mensuel des prix des matières premières (métaux, énergie, agriculture...).
-
-**Fonctionnement :** requête simple, timeout de 30s, sauvegarde directe du contenu binaire.
-
-**Sauvegarde :** `data/raw/world_bank/commodity_prices.xlsx` (écrasé à chaque exécution).
-
-#### 📡 La source en détail
-
-Comme pour FFPI, il ne s'agit pas d'une API interrogeable avec paramètres mais d'un **fichier Excel statique** (`CMO-Historical-Data-Monthly.xlsx`) publié mensuellement par la Banque Mondiale dans le cadre de son rapport **Commodity Markets Outlook (CMO)**.
-
-- **Pas d'authentification, pas de paramètres** : téléchargement direct du fichier.
-- **Contenu** : historique mensuel des prix (souvent depuis 1960) pour des dizaines de matières premières classées par catégorie — énergie (pétrole, gaz, charbon), métaux (or, cuivre, aluminium...), agriculture (blé, maïs, soja, **phosphates**, engrais...), et d'autres.
-- **Fréquence de mise à jour** : mensuelle.
-
-#### 📦 Données retournées (structure du fichier Excel)
-
-Le fichier contient plusieurs feuilles, notamment :
-
-| Feuille                | Contenu                                                |
-|-------------------------|---------------------------------------------------------|
-| `Monthly Prices`        | Prix mensuels bruts par matière première (une colonne par produit, une ligne par mois) |
-| `Monthly Indices`       | Indices de prix (base 100) par catégorie                |
-| `Description`           | Métadonnées : unité, devise, source de chaque série     |
-
-Exemple simplifié de `Monthly Prices` :
-
-| Date      | Crude oil, average ($/bbl) | Wheat, US HRW ($/mt) | Phosphate rock ($/mt) | DAP ($/mt) |
-|-----------|------------------------------|------------------------|--------------------------|------------|
-| 2026M06   | 78.4                          | 268.5                  | 165.2                    | 612.0      |
-| 2026M07   | 79.1                          | 271.0                  | 168.0                    | 615.5      |
-
-- Chaque colonne correspond à une matière première précise, avec son unité de prix (`$/bbl`, `$/mt`...) indiquée dans l'en-tête.
-- Les phosphates et engrais (`Phosphate rock`, `DAP`, `TSP`, `Urea`...) sont particulièrement pertinents pour le suivi du secteur OCP.
-
----
+Fichier Excel statique (`CMO-Historical-Data-Monthly.xlsx`), validation du contenu (taille + lecture Excel effective) avant d'écraser `latest`.
+Sauvegarde : `data/raw/world_bank/commodity_prices_{date}.xlsx` + `commodity_prices_latest.xlsx`.
 
 ### 3.5 `NewsCollector` — Actualités (NewsAPI)
-
-Récupère les articles récents liés à OCP et au secteur des engrais/phosphates via [NewsAPI](https://newsapi.org/).
-
-- **Mots-clés suivis** : `"OCP Group"`, `"OCP SA"`, `phosphate`, `fertilizer`, `agriculture`
-
-**Fonctionnement :**
-1. `collect_keyword(keyword, days_back)` construit une fenêtre de recherche (minimum 2 jours en arrière, contrainte du plan gratuit NewsAPI) et interroge l'API (tri par date de publication, langue anglaise).
-2. Vérifie le statut de la réponse (`status == "error"`) avant d'extraire les articles.
-3. `time.sleep(1)` entre chaque mot-clé.
-4. Les résultats sont regroupés dans un dictionnaire `{mot_clé: [articles]}`.
-
-**Sauvegarde :** `data/raw/news/news_{AAAA-MM-JJ_HHMMSS}.json` (un fichier horodaté par exécution, pas de fichier `latest` ici car chaque run capture une fenêtre temporelle différente).
-
-#### 📡 L'API en détail
-
-[NewsAPI](https://newsapi.org/) est un agrégateur qui indexe des dizaines de milliers de sources d'actualités (journaux, blogs, sites spécialisés) et expose une recherche par mots-clés via une API REST.
-
-- **Authentification** : clé API (`apiKey`) passée en paramètre de requête.
-- **Endpoint utilisé** : `/v2/everything` — recherche plein texte sur tous les articles indexés (par opposition à `/v2/top-headlines` qui ne couvre que la une).
-- **Limites du plan gratuit** : recherche limitée aux **articles vieux d'au maximum un mois**, et surtout — contrainte visible dans le code — **impossible d'interroger les dernières 24h** (d'où `safe_days_back = max(days_back, 2)`, qui force une fenêtre d'au moins 2 jours en arrière).
-- **Paramètres principaux** : `q` (mot-clé/expression, les guillemets forcent une recherche exacte comme `"OCP Group"`), `from`/`to` (fenêtre de dates), `language`, `sortBy` (`relevancy`, `popularity`, `publishedAt`), `pageSize` (max 100 en gratuit).
-
-#### 📦 Données retournées (exemple)
-
-```json
-{
-  "status": "ok",
-  "totalResults": 37,
-  "articles": [
-    {
-      "source": { "id": "reuters", "name": "Reuters" },
-      "author": "Jane Doe",
-      "title": "OCP Group announces new fertilizer plant investment",
-      "description": "Morocco's OCP Group said it will invest...",
-      "url": "https://www.reuters.com/...",
-      "urlToImage": "https://www.reuters.com/.../image.jpg",
-      "publishedAt": "2026-07-20T08:15:00Z",
-      "content": "Morocco's OCP Group said on Monday it will invest... [+1500 chars]"
-    }
-  ]
-}
-```
-
-- `status` : `"ok"` ou `"error"` (le collector vérifie ce champ avant de continuer).
-- `totalResults` : nombre total d'articles correspondants (peut dépasser `pageSize`, dans ce cas seule la première page est renvoyée).
-- `articles` : liste des articles, chacun avec sa source, son titre, sa description, son URL, sa date de publication et un extrait de contenu (`content` est souvent tronqué à ~200 caractères en plan gratuit, avec un indicateur `[+N chars]`).
-
----
+Endpoint `/v2/everything`, mots-clés OCP/phosphate/fertilizer/agriculture/concurrents. Fenêtre de recherche adaptative via `state.py` (`get_last_success`/`set_last_success`) — repart du dernier run réussi, plafonnée à 30 jours (contrainte du plan gratuit NewsAPI : pas d'accès aux dernières 24h, `floor=2`).
+Sauvegarde : `data/raw/news/news_{date_heure}.json` (pas de `latest` figé, chaque run capture une fenêtre temporelle différente — mais `transform_news.py` lit `news_latest.json`, donc `_save_dated_and_latest` s'applique bien ici aussi).
 
 ### 3.6 `OCPFinancialsCollector` — Résultats financiers OCP
-
-Contrairement aux autres collectors, celui-ci ne fait **aucune requête HTTP** : il lit et valide un fichier de configuration local (`config/ocp_financials.json`) alimenté manuellement à partir des communiqués officiels d'OCP Group (les résultats financiers ne sont pas disponibles via une API publique).
-
-**Champs requis par trimestre :** `quarter`, `revenue`, `ebitda`, `net_income`, `published_at`
-
-**Fonctionnement (`collect()`) :**
-1. `_load_config()` charge et parse le JSON, vérifie que c'est bien une liste.
-2. `_validate_entry()` vérifie pour chaque entrée :
-   - présence de tous les champs requis (non vides) ;
-   - `revenue` et `ebitda` sont des nombres **positifs** ;
-   - `net_income` est bien un nombre (les pertes trimestrielles, négatives, sont acceptées).
-3. Les doublons de trimestre sont ignorés (`seen_quarters`).
-4. Si `ebitda_margin` est absent, il est **calculé automatiquement** : `ebitda / revenue` (arrondi à 4 décimales).
-5. Un champ `source` par défaut (`"OCP Group communiqué"`) est ajouté si absent.
-
-**Sauvegarde :** `data/raw/ocp_financials/ocp_financials.json` (liste des trimestres validés).
-
-#### 📡 La source en détail
-
-Il n'existe **pas d'API publique** pour les résultats financiers d'OCP Group (entreprise non cotée en bourse en actions ordinaires accessibles au grand public de la même façon qu'une société cotée classique, et ne publiant pas de flux de données structuré). Les chiffres proviennent donc des **communiqués de presse officiels** publiés trimestriellement par OCP Group, saisis manuellement dans `config/ocp_financials.json`. Ce collector joue un rôle de **validation et de nettoyage** plutôt que de collecte réseau.
-
-#### 📦 Données retournées / attendues (format `config/ocp_financials.json` en entrée, identique en sortie après validation)
-
-```json
-[
-  {
-    "quarter": "Q2-2026",
-    "revenue": 26800000000,
-    "ebitda": 11000000000,
-    "ebitda_margin": 0.4104,
-    "net_income": 5600000000,
-    "published_at": "2026-07-25",
-    "source": "OCP Group communiqué"
-  }
-]
-```
-
-| Champ           | Type / Unité                    | Description                                              |
-|------------------|----------------------------------|------------------------------------------------------------|
-| `quarter`        | `string` (`"QX-AAAA"`)          | Trimestre concerné                                        |
-| `revenue`        | `number` (MAD, ≥ 0)             | Chiffre d'affaires du trimestre                           |
-| `ebitda`         | `number` (MAD, ≥ 0)             | Excédent brut d'exploitation                              |
-| `ebitda_margin`  | `float` (calculé si absent)     | `ebitda / revenue`, arrondi à 4 décimales                 |
-| `net_income`     | `number` (MAD, peut être négatif)| Résultat net (une perte trimestrielle est acceptée)       |
-| `published_at`   | `string` (`AAAA-MM-JJ`)         | Date de publication du communiqué                         |
-| `source`         | `string`                        | Ajouté automatiquement si absent (`"OCP Group communiqué"`) |
+Pas de requête HTTP : lit/valide `src/config/ocp_financials.json` (saisie manuelle depuis les communiqués officiels). Vérifie champs requis, positivité de `revenue`/`ebitda`, calcule `ebitda_margin` si absent, déduplique par trimestre.
+Sauvegarde : `data/raw/ocp_financials/ocp_financials.json`.
 
 ---
 
-## ⚙️ 4. Configuration
+## 🔄 4. Transformation (`src/etl/transform/`)
 
-### `config/settings.py`
+Chaque source a son module `transform_xxx.py` avec deux fonctions : `clean()` (nettoyage/typage) et `transform()` (mise en forme dimensionnelle), orchestrées par `run()`.
+
+- **`transform_alpha.py`** : construit `DimCompany` (avec `company_name`/`sector` = `"Unknown"`, protégés en base — voir §6) et `FactStockPrices`.
+- **`transform_fao.py`** : extrait `DimCountry`, `DimCrop`, `DimElement` et `FactCropProduction`.
+- **`transform_ffpi.py`** : localise dynamiquement le début des données, type les colonnes, retourne `FactFoodPriceIndex`.
+- **`transform_worldbank.py`** : détecte dynamiquement la ligne de début (motif `YYYYMxx`), passe en format long (`melt`), extrait `DimCommodity`/`FactCommodityPrices`.
+- **`transform_news.py`** : nettoie le HTML/entités des textes (`_clean_text`), accès défensif aux champs de chaque article (`article.get(...)`, avec repli sur `"Unknown"` si `source` est absent/malformé), construit `FactNews`, `BridgeArticleKeyword`, `DimNewsSource`, `DimKeyword`.
+- **`transform_ocp.py`** : type les montants, déduplique par `quarter_label` (garde la dernière entrée).
+
+---
+
+## ✅ 5. Validation — `quality_checks.py` (Pandera)
+
+Chaque table de sortie (dimension ou fait) a un schéma Pandera dédié dans `SCHEMAS` (`src/etl/quality_checks.py`), avec typage, contraintes (`Check.ge(0)`, `in_range`...) et unicité, alignés sur `database/schema.sql`. `main.py` valide table par table : une table en échec est exclue **sans bloquer** les autres tables de la même source.
+
+---
+
+## 🗄️ 6. Chargement (`src/etl/load/`)
+
+- **`db_writer.py`** : `upsert(engine, df, table_name, unique_cols, protected_cols=None)` — `INSERT ... ON CONFLICT DO UPDATE` générique via SQLAlchemy, avec colonnes « protégées » (jamais écrasées lors d'un conflit, ex. `company_name`/`sector` saisis manuellement).
+- **`load_dimensions.py`** : charge toutes les dimensions, dont `DimDate` (générée dynamiquement par `generate_dim_date.py`, de 1960 à aujourd'hui + 5 ans).
+- **`load_facts.py`** : charge les tables de faits dans un **ordre explicite** (liste, pas un dict) — `FactNews` **avant** `BridgeArticleKeyword`, car cette dernière référence `FactNews.url` par contrainte FK.
+
+`main.py` appelle `load_dimensions()` avant `load_facts()`, ce qui protège toutes les FK vers les dimensions.
+
+---
+
+## ⚙️ 7. Configuration
+
+### `src/config/settings.py`
 Centralise les URLs des sources et les dossiers de sortie pour chaque collector.
 
-### `config/config.py`
-Charge les clés API / tokens depuis un fichier `.env` (via `python-dotenv`) :
+### `src/config/config.py`
+Charge les clés API/tokens depuis `.env` (via `python-dotenv`), avec validation **différée** (erreur levée seulement au premier usage réel d'une variable manquante) :
 
 | Variable            | Utilisée par         |
-|---------------------|----------------------|
-| `API_KEY_NEWS`       | `NewsCollector`      |
+|---------------------|-----------------------|
+| `API_KEY_NEWS`       | `NewsCollector`       |
 | `API_KEY_alpha`      | `AlphaVantageCollector` |
-| `FAO_USERNAME`       | `FAOCollector` (via `TokenManager` dans `auth.py`) |
-| `FAO_PASSWORD`       | `FAOCollector` (via `TokenManager` dans `auth.py`) |
+| `FAO_USERNAME` / `FAO_PASSWORD` | `FAOCollector` (via `TokenManager`) |
+| `COGNITO_CLIENT_ID`  | `TokenManager`        |
+| `POSTGRES_USER/PASSWORD/DB/HOST/PORT` | `db_config.py` |
 
-### `config/auth.py`
+### `src/config/auth.py` — `TokenManager`
+Authentification FAOSTAT via **AWS Cognito** (`boto3`, flux `USER_PASSWORD_AUTH`). Le token est mis en cache et rafraîchi automatiquement dès qu'il expire dans moins de 60 secondes — évite de regénérer un token à chacune des 280 requêtes de `FAOCollector`. En cas d'échec Cognito (`ClientError`, `BotoCoreError`, `KeyError`), une `RuntimeError` explicite est levée.
 
-Contient la classe `TokenManager`, qui gère l'authentification auprès de **FAOSTAT via AWS Cognito** (le service d'authentification managé d'AWS). C'est ce token qui est ensuite utilisé en en-tête `Authorization: Bearer <token>` par `FAOCollector` (voir section 3.2).
+### `src/config/db_config.py`
+Crée l'engine SQLAlchemy (`postgresql+psycopg2`) au premier appel réel (pas à l'import), avec `search_path=ocp_dataflow`.
 
-#### 🔎 AWS, services AWS et `boto3` — les bases
+### `src/config/ocp_financials.json`
+Données manuelles OCP — à mettre à jour à chaque publication trimestrielle.
 
-**AWS (Amazon Web Services)** est une plateforme de cloud computing : plutôt que d'acheter et de gérer soi-même des serveurs, des bases de données ou un système d'authentification, on utilise à la demande des services déjà prêts, exposés sur Internet. Chaque **service AWS** est spécialisé dans une tâche précise, par exemple :
-
-| Service      | Rôle                                    |
-|--------------|-------------------------------------------|
-| **S3**       | Stocker des fichiers                      |
-| **EC2**      | Héberger des serveurs virtuels            |
-| **RDS**      | Gérer une base de données SQL             |
-| **DynamoDB** | Base de données NoSQL                     |
-| **Lambda**   | Exécuter du code sans gérer de serveur    |
-| **Cognito**  | Gérer les utilisateurs et l'authentification |
-| **SNS**      | Envoyer des notifications                 |
-
-**`boto3`** n'est **pas** un service AWS : c'est le **SDK Python officiel**, l'intermédiaire qui permet à du code Python de communiquer avec n'importe quel service AWS.
-
-```text
-Ton code Python → boto3 → Service AWS (Cognito, S3, RDS, ...) → Exécution de l'action demandée
-```
-
-Concrètement, on choisit le service voulu via `boto3.client("<nom_du_service>")` :
-
-```python
-boto3.client("cognito-idp")  # authentification (utilisé ici par TokenManager)
-boto3.client("s3")           # stockage de fichiers
-boto3.client("dynamodb")     # base de données NoSQL
-```
-
-Dans ce projet, `TokenManager` appelle `boto3.client("cognito-idp", region_name=COGNITO_REGION)` : `boto3` ne fait qu'acheminer la requête et la réponse — c'est **Cognito** qui réalise réellement l'authentification (vérification `username`/`password`, émission du token).
-
-#### 🔎 `TokenManager` pas à pas
-
-**Constructeur (`__init__`)** : mémorise `username`/`password`, crée un client Cognito (`self.client`), et initialise l'état "pas encore de token" (`self._token = None`, `self._expires_at = 0`).
-
-**`get_token()`** — point d'entrée utilisé par les collectors :
-1. Si aucun token n'a encore été récupéré (`self._token is None`), ou s'il expire dans moins de 60 secondes (`time.time() > self._expires_at - 60`), on appelle `_refresh()`.
-2. Sinon, le token déjà en mémoire est réutilisé tel quel.
-
-La marge de sécurité de **60 secondes** évite qu'une requête parte avec un token expiré entre le moment où on le vérifie et le moment où il est réellement utilisé (ex. token expirant à 15:00:00 → renouvelé dès 14:59:00, plutôt que d'attendre 15:00:00 pile et risquer un appel à 15:00:01 avec un token déjà mort).
-
-**`_refresh()`** — contacte réellement Cognito via `initiate_auth(AuthFlow="USER_PASSWORD_AUTH", ...)`, qui renvoie un `AuthenticationResult` contenant `AccessToken` (le jeton à utiliser) et `ExpiresIn` (durée de validité en secondes). Le code calcule alors `self._expires_at = time.time() + ExpiresIn` pour savoir quand renouveler.
-
-**Pourquoi mettre le token en cache plutôt que de le régénérer à chaque appel ?** Parce que `FAOCollector` peut effectuer jusqu'à 280 requêtes dans une seule collecte (8 zones × 7 cultures × 5 années) : régénérer un token Cognito à chaque requête serait lent et inutile, alors que le même token reste valide pendant toute sa durée de vie (typiquement 1h).
-
-**Gestion des erreurs** : voir le paragraphe dédié ci-dessus (`ClientError`, `BotoCoreError`, `KeyError` → `RuntimeError`).
-
-**Pourquoi centraliser cette logique dans une classe dédiée ?** Sans `TokenManager`, chaque endroit du code qui a besoin d'un token devrait réimplémenter la vérification d'expiration et l'appel à Cognito. En centralisant, le reste du projet se contente de `token_manager.get_token()` sans se soucier de l'existence, de l'expiration ou du renouvellement du token — une séparation des responsabilités qui rend le code plus simple à maintenir et à réutiliser.
-
-```python
-import boto3, time
-from botocore.exceptions import ClientError, BotoCoreError
-
-COGNITO_CLIENT_ID = "2csltsigao85ivhp6ojp1aic7o"
-COGNITO_REGION = "eu-west-1"
-
-class TokenManager:
-   def __init__(self, username: str, password: str):
-      self.username = username
-      self.password = password
-      self.client = boto3.client("cognito-idp", region_name=COGNITO_REGION)
-      self._token = None
-      self._expires_at = 0
-
-   def get_token(self) -> str | None:
-      if self._token is None or time.time() > self._expires_at - 60:
-         self._refresh()
-      return self._token
-
-   def _refresh(self) -> None:
-      try:
-         response = self.client.initiate_auth(
-            ClientId=COGNITO_CLIENT_ID,
-            AuthFlow="USER_PASSWORD_AUTH",
-            AuthParameters={
-               "USERNAME": self.username,
-               "PASSWORD": self.password,
-            },
-         )
-         auth_result = response["AuthenticationResult"]
-         self._token = auth_result["AccessToken"]
-         self._expires_at = time.time() + auth_result["ExpiresIn"]
-      except (ClientError, BotoCoreError, KeyError) as e:
-         self._token = None
-         raise RuntimeError(f"Échec d'authentification Cognito : {e}") from e
-```
-
-**Fonctionnement :**
-- `boto3` (SDK AWS officiel pour Python) est utilisé pour dialoguer avec **Amazon Cognito**, service géré par la FAO pour authentifier les utilisateurs de son API.
-- **`get_token()`** est le point d'entrée utilisé par les collectors : il renvoie un token valide, et ne déclenche un rafraîchissement (`_refresh()`) que si aucun token n'a encore été récupéré ou s'il expire dans moins de 60 secondes (marge de sécurité).
-- **`_refresh()`** utilise le flux d'authentification `USER_PASSWORD_AUTH` de Cognito : identifiants (`FAO_USERNAME`/`FAO_PASSWORD`) envoyés à Cognito, qui renvoie en retour un `AccessToken` (le vrai jeton à utiliser) et sa durée de validité (`ExpiresIn`, en secondes).
-- Ce mécanisme évite de générer un nouveau token à **chaque** requête (ce qui serait lent et inutile) : le même token est réutilisé pendant toute sa durée de vie, et n'est renouvelé qu'une fois arrivé (presque) à expiration — important ici vu le grand nombre de requêtes envoyées par `FAOCollector` (jusqu'à 280).
-- `COGNITO_CLIENT_ID` est l'identifiant de l'application cliente enregistrée côté FAO/Cognito (public, ce n'est pas un secret à proprement parler — contrairement au couple `FAO_USERNAME`/`FAO_PASSWORD`).
-- **Gestion des erreurs** : `_refresh()` capture les exceptions liées à Cognito (`ClientError`, `BotoCoreError`) ainsi que `KeyError` (réponse malformée ne contenant pas les clés attendues). Le token est remis à `None` puis une `RuntimeError` explicite est levée (`raise ... from e`, pour conserver la trace d'origine). C'est cette `RuntimeError` que `FAOCollector.collect()` intercepte : à l'échec du tout premier appel, la collecte est annulée immédiatement (`self.logger.critical`) ; à l'échec d'un rafraîchissement en cours de boucle, les données déjà accumulées sont sauvegardées avant l'arrêt (`self.logger.error` + `self.save(all_data)`).
-
-Un fichier **`.env.example`** est fourni à la racine du projet comme modèle :
+Un fichier **`.env.example`** est fourni comme modèle :
 
 ```dotenv
 API_KEY_alpha=
 API_KEY_NEWS=
 FAO_USERNAME=
 FAO_PASSWORD=
+COGNITO_CLIENT_ID=
+POSTGRES_USER=
+POSTGRES_PASSWORD=
+POSTGRES_DB=
+POSTGRES_HOST=
+POSTGRES_PORT=
 ```
 
-📌 **À faire** : copier ce fichier en `.env` (`cp .env.example .env`) et renseigner les valeurs avant de lancer les collectors concernés :
+📌 **À faire** : `cp .env.example .env` puis renseigner les vraies valeurs avant de lancer le pipeline.
 
-```bash
-cp .env.example .env
-```
-
-⚠️ Le fichier `.env` (contenant les vraies clés et identifiants) ne doit **jamais** être commité — pense à l'ajouter dans `.gitignore` s'il n'y est pas déjà.
-
-### `config/ocp_financials.json`
-Fichier de données manuelles (voir `OCPFinancialsCollector`) — à mettre à jour à chaque publication trimestrielle d'OCP.
+⚠️ Le fichier `.env` ne doit **jamais** être commité (déjà exclu via `.gitignore`/`.dockerignore`).
 
 ---
 
-## 🚀 5. Exécution — `run_collectors.py`
+## 🚀 8. Exécution — `src/run_etl.py`
 
-Script principal qui instancie et exécute les collectors les uns après les autres, en isolant les erreurs (un échec sur un collector n'interrompt pas les autres) :
+Point d'entrée qui appelle `run_pipeline()` (`src/etl/main.py`), lequel exécute pour chaque source, dans l'ordre :
 
-```python
-collectors = [
-   NewsCollector(),
-   AlphaVantageCollector(),
-   WorldBankCollector(),
-   FAOCollector(),
-   FFPICollector(),
-   OCPFinancialsCollector()
-]
+```
+collect() → transform.run() → validate() par table → (à la fin) load_dimensions() → load_facts()
 ```
 
-Pour chaque collector : log de démarrage → `collect()` → succès/échec enregistré → log récapitulatif final (`results["success"]` / `results["failed"]`).
+Chaque étape est isolée : un échec sur une source (ou une table) n'interrompt pas les autres. Le processus se termine avec un code de sortie **1** si au moins une source a échoué (`sys.exit(1)` dans `run_etl.py`), utile pour la supervision CI/CD ou cron.
 
-> 💡 Les **6 collectors sont actifs** dans la liste — le pipeline complet (marchés financiers, prix des matières premières, production agricole, indice alimentaire, actualités et résultats OCP) est exécuté à chaque lancement de `run_collectors.py`. Pense à bien renseigner toutes les variables du `.env` (`API_KEY_alpha`, `API_KEY_NEWS`, `FAO_USERNAME`, `FAO_PASSWORD`) avant de lancer le script, sous peine de voir `AlphaVantageCollector`, `NewsCollector` et `FAOCollector` échouer faute d'authentification.
-
----
-
-## 📥 Installation
+### Lancer en local
 
 ```bash
 pip install -r requirements.txt
+python -m src.run_etl
 ```
 
-Dépendances : `boto3`, `python-dotenv` (`dotenv`), `requests`
+> Le module doit être lancé avec `-m` depuis la racine du repo, pour que les imports `from src.xxx import ...` se résolvent correctement.
+
+Les données sont sauvegardées sous `data/raw/<source>/` et les logs sous `logs/<nom_du_collector>.log`.
 
 ---
 
-## ▶️ Lancer le pipeline
-
-```bash
-python run_collectors.py
-```
-
-Les données collectées sont sauvegardées sous `data/raw/<source>/` et les logs sous `logs/<nom_du_collector>.log`.
-
----
-
-## 🐳 6. Exécution avec Docker
-
-Un `Dockerfile` est fourni pour exécuter le pipeline dans un environnement isolé et reproductible.
+## 🐳 9. Exécution avec Docker
 
 ```dockerfile
-FROM python:3.11-slim
+FROM python:3.11.9-slim
 
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --default-timeout=120 --retries 10 -r requirements.txt
 
-COPY . .
+COPY src/ ./src/
 
-CMD ["python", "run_collectors.py"]
+RUN useradd --create-home --uid 1000 etluser \
+    && chown -R etluser:etluser /app
+USER etluser
+
+CMD ["python", "-m", "src.run_etl"]
 ```
 
-**Fonctionnement :**
-- Image de base **`python:3.11-slim`** : version allégée de Python 3.11, sans les paquets superflus, pour une image finale plus légère.
-- Les dépendances (`requirements.txt`) sont copiées et installées **avant** le reste du code : Docker met cette étape en cache, donc si seul le code change (pas `requirements.txt`), le `pip install` n'est pas relancé au prochain build → builds plus rapides.
-- `--no-cache-dir` évite de stocker le cache pip dans l'image, réduisant sa taille.
-- Tout le reste du projet est ensuite copié dans `/app`.
-- Au démarrage du conteneur, `run_collectors.py` est exécuté automatiquement (`CMD`).
+- **`COPY src/ ./src/`** (et non `COPY src/ .`) : préserve la structure du paquet `src/` dans l'image, indispensable pour que `from src.xxx import ...` fonctionne.
+- **`CMD ["python", "-m", "src.run_etl"]`** : exécution en tant que module, cohérente avec l'exécution locale.
+- Image `python:3.11.9-slim`, dépendances installées avant copie du code (cache Docker), utilisateur non-root (`etluser`).
 
 ### Construire l'image
 
 ```bash
-docker build -t collectors .
+docker build -t ocp-dataflow .
 ```
 
-### Lancer le conteneur
-
-Les clés API doivent être transmises au conteneur — soit via un fichier `.env`, soit variable par variable :
+### Lancer avec Docker Compose (recommandé — inclut Postgres)
 
 ```bash
-docker run --rm --env-file .env collectors
+docker compose up --build
 ```
 
-ou :
+`docker-compose.yml` orchestre `postgres` (avec healthcheck, init via `database/schema.sql`) et `etl` (démarre seulement une fois Postgres prêt). Volumes montés :
 
-```bash
-docker run --rm \
-  -e API_KEY_alpha=xxx \
-  -e API_KEY_NEWS=xxx \
-  -e FAO_USERNAME=xxx \
-  -e FAO_PASSWORD=xxx \
-  collectors
+```yaml
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
 ```
 
-### Conserver les données et les logs en dehors du conteneur
+> Le volume `./data:/app/data` est **indispensable** : sans lui, toutes les données brutes collectées (`data/raw/*`) sont perdues à chaque destruction du conteneur `etl` (`restart: "no"`).
 
-Par défaut, `data/` et `logs/` sont créés **à l'intérieur** du conteneur et sont donc perdus quand celui-ci est supprimé (`--rm`). Pour les conserver sur la machine hôte, monter des volumes :
+### Lancer le conteneur seul (sans compose)
 
 ```bash
 docker run --rm --env-file .env \
+  -e POSTGRES_HOST=<host_postgres_accessible> \
   -v $(pwd)/data:/app/data \
   -v $(pwd)/logs:/app/logs \
-  collectors
+  ocp-dataflow
 ```
 
-### Fichier `.dockerignore`
+### Persistance de l'état incrémental (`etl_state.json`)
 
-```ignore
+`NewsCollector` s'appuie sur `src/etl/extract/etl_state.json` (via `state.py`) pour ne récupérer que les news depuis le dernier run réussi. Ce fichier vit **sous `data`-like logique mais physiquement sous `src/etl/extract/`** — pensez à le monter explicitement si vous voulez qu'il survive à la destruction du conteneur :
+
+```yaml
+      - ./src/etl/extract/etl_state.json:/app/src/etl/extract/etl_state.json
+```
+
+Sans ce montage (ou une migration vers une table Postgres dédiée), chaque run Docker repart avec `last_success = None` et retombe sur la fenêtre max (30 jours) — ce qui fonctionne mais annule l'intérêt de la logique incrémentale.
+
+### `.dockerignore`
+
+```
 .env
-data/
-logs/
-.git/
+.env.*
+.git
 __pycache__/
+*.pyc
+.venv/
+venv/
+logs/
 ```
 
-Ce fichier évite de copier dans l'image Docker des éléments sensibles ou inutiles lors du `COPY . .` :
-- `.env` → clés API réelles, ne doit jamais se retrouver dans une image (surtout si celle-ci est ensuite publiée sur un registre) ;
-- `data/` et `logs/` → générés à l'exécution, inutiles (et potentiellement volumineux) dans l'image de base ;
-- `.git/` → historique Git, alourdit l'image sans utilité à l'exécution ;
+`etl_state.json` n'est **plus** exclu ici (contrairement à une version précédente) : il doit pouvoir être copié dans l'image au build, quitte à être ensuite écrasé par un volume monté en exécution.
 
 ---
 
-## ✅ 7. Changelog — Corrections et ajouts récents
+## ✅ 10. Changelog — Corrections et ajouts récents
 
-Suivi des dernières améliorations apportées au projet.
+### Imports — uniformisation `src.xxx`
+Le projet mélangeait deux styles d'import (`from logger_config import ...` et `from src.config... import ...`), rendant le pipeline **inexécutable** aussi bien en local qu'en Docker selon la configuration. Tous les modules utilisent désormais `from src.xxx import ...` de façon cohérente, et le `Dockerfile`/`CMD` ont été adaptés en conséquence (`COPY src/ ./src/`, `python -m src.run_etl`).
 
-### `collectors/base_collector.py`
-- **Pas de retry inutile sur les erreurs client (4xx)** : `_request_with_retry()` distingue désormais les erreurs serveur/réseau (retryables, avec backoff exponentiel) des erreurs client comme `401` (clé API invalide), `403` ou `404` (non retryables, car réessayer ne change rien au résultat). Le code arrête immédiatement et logue l'erreur au lieu d'attendre inutilement le backoff complet.
+### `extract_base.py`
+- **Pas de retry inutile sur les erreurs client (4xx)** : `_request_with_retry()` distingue erreurs serveur/réseau (retryables, backoff exponentiel) des erreurs client (401/403/404, non retryables).
+
+### `transform_ffpi.py`
+- Détection **dynamique** du début des données (recherche de la première date valide en colonne A), au lieu d'un `skiprows=4` en dur — aligné sur l'approche déjà utilisée dans `transform_worldbank.py`.
+
+### `transform_news.py`
+- Accès défensif aux champs `source`/`url`/`publishedAt` de chaque article (`.get()` avec replis), pour éviter qu'un article malformé ne fasse échouer tout le run.
+
+### `load_facts.py`
+- `FACT_KEYS` passé d'un `dict` à une liste de tuples **explicitement ordonnée et commentée**, pour documenter la dépendance FK implicite (`FactNews` avant `BridgeArticleKeyword`).
+
+### `docker-compose.yml`
+- Ajout du volume `./data:/app/data` pour éviter la perte des données brutes collectées entre deux runs du conteneur `etl`.
 
 ### Fichiers manquants ajoutés à la racine du projet
-Ces fichiers étaient documentés dans ce README mais absents du dépôt — ils sont maintenant présents et à jour :
-
 | Fichier | Rôle |
 |---------|------|
-| `.env.example` | Modèle des variables d'environnement requises (`API_KEY_alpha`, `API_KEY_NEWS`, `FAO_USERNAME`, `FAO_PASSWORD`) |
-| `Dockerfile` | Image Docker pour exécution isolée du pipeline (voir section 6) |
-| `.dockerignore` | Exclusion de `.env`, `data/`, `logs/`, `.git/`, `__pycache__/` du build Docker |
+| `.env.example` | Modèle des variables d'environnement requises |
+| `Dockerfile` | Image Docker pour exécution isolée du pipeline |
+| `.dockerignore` | Exclusion de `.env`, `logs/`, `.git/`, `__pycache__/` du build Docker |
 
-📌 Avant de cloner et lancer le projet : `cp .env.example .env` puis renseigner les vraies valeurs (voir section 4).
-- `__pycache__/` → fichiers `.pyc` compilés, régénérés automatiquement, à exclure de toute image ou dépôt.
+---
+
+## 📥 Installation rapide
+
+```bash
+git clone <repo>
+cd ocp-dataflow
+cp .env.example .env   # puis renseigner les valeurs
+pip install -r requirements.txt
+python -m src.run_etl
+```
+
+Ou via Docker Compose (recommandé) :
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
