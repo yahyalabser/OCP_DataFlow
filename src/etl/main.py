@@ -1,6 +1,8 @@
+import time
 import pandera.pandas as pa
 from src.etl.quality_checks import validate
 from src.logger_config import get_logger
+from src.etl.monitoring import log_run
 
 from src.etl.extract.alpha_vantage_collector import AlphaVantageCollector
 from src.etl.extract.world_bank_collector import WorldBankCollector
@@ -29,7 +31,10 @@ PIPELINE = [
 def _run_source(name, CollectorClass, transformer, table_name, transformed_data, logger) -> str:
    """Exécute collect -> transform -> validate pour une source.
    Retourne "success", "partial" (au moins une table exclue) ou "failed".
-   Chaque étape logue précisément où ça a échoué pour faciliter le debug en prod."""
+   Un seul appel à log_run par source, à la toute fin, avec le statut définitif
+   (SUCCESS / PARTIAL / FAILED) et la durée réellement écoulée."""
+
+   start = time.time()
 
    # --- Étape 1 : collecte ---
    try:
@@ -37,6 +42,7 @@ def _run_source(name, CollectorClass, transformer, table_name, transformed_data,
       collector.collect()
    except Exception as e:
       logger.error(f"[{name}] Échec à l'étape 'collect' : {e}", exc_info=True)
+      log_run(name, 0, 0, time.time() - start, "FAILED", str(e))
       return "failed"
 
    # --- Étape 2 : transformation ---
@@ -44,9 +50,11 @@ def _run_source(name, CollectorClass, transformer, table_name, transformed_data,
       output = transformer.run()
    except FileNotFoundError as e:
       logger.error(f"[{name}] Échec à l'étape 'transform' (fichier source introuvable) : {e}", exc_info=True)
+      log_run(name, 0, 0, time.time() - start, "FAILED", str(e))
       return "failed"
    except Exception as e:
       logger.error(f"[{name}] Échec à l'étape 'transform' : {e}", exc_info=True)
+      log_run(name, 0, 0, time.time() - start, "FAILED", str(e))
       return "failed"
 
    # --- Étape 3 : validation ---
@@ -54,12 +62,16 @@ def _run_source(name, CollectorClass, transformer, table_name, transformed_data,
 
    validated_tables = []
    failed_tables = []
+   error_messages = []
+   rows_extracted = sum(len(df) for df in tables.values())
+   rows_loaded = 0
 
    for key, df in tables.items():
       try:
          validated = validate(key, df)
          transformed_data[key] = validated
          validated_tables.append(key)
+         rows_loaded += len(validated)
       except pa.errors.SchemaErrors as e:
          logger.error(
             f"[{name}] Échec de validation pandera pour la table '{key}' "
@@ -68,6 +80,7 @@ def _run_source(name, CollectorClass, transformer, table_name, transformed_data,
             exc_info=True,
          )
          failed_tables.append(key)
+         error_messages.append(f"{key}: {e}")
       except Exception as e:
          logger.error(
             f"[{name}] Échec à l'étape 'validate' pour la table '{key}' : {e} "
@@ -75,8 +88,12 @@ def _run_source(name, CollectorClass, transformer, table_name, transformed_data,
             exc_info=True,
          )
          failed_tables.append(key)
+         error_messages.append(f"{key}: {e}")
+
+   duration = time.time() - start
 
    if failed_tables and not validated_tables:
+      log_run(name, rows_extracted, 0, duration, "FAILED", " | ".join(error_messages))
       return "failed"
 
    if failed_tables:
@@ -84,9 +101,11 @@ def _run_source(name, CollectorClass, transformer, table_name, transformed_data,
          f"[{name}] Terminé partiellement : {', '.join(validated_tables)} validée(s), "
          f"{', '.join(failed_tables)} exclue(s)"
       )
+      log_run(name, rows_extracted, rows_loaded, duration, "PARTIAL", " | ".join(error_messages))
       return "partial"
 
    logger.info(f"[{name}] Terminé avec succès ({', '.join(validated_tables)})")
+   log_run(name, rows_extracted, rows_loaded, duration, "SUCCESS")
    return "success"
 
 

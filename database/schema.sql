@@ -127,3 +127,14 @@ CREATE TABLE ocp_dataflow."FactOCPFinancials" (
    ebitda_margin DECIMAL(6,4),
    net_income DECIMAL(18,2)
 );
+
+CREATE TABLE ocp_dataflow."EtlRunLog" (
+   run_id SERIAL PRIMARY KEY,
+   run_datetime TIMESTAMP NOT NULL DEFAULT now(),
+   source VARCHAR NOT NULL,
+   rows_extracted INT,
+   rows_loaded INT,
+   duration_seconds DECIMAL(10,2),
+   status VARCHAR NOT NULL CHECK (status IN ('SUCCESS', 'PARTIAL', 'FAILED')),
+   error_message TEXT
+);
