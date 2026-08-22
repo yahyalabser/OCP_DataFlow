@@ -1,0 +1,15 @@
+FROM apache/airflow:2.9.3-python3.11
+ 
+# IMPORTANT : on utilise requirements-airflow.txt (et non requirements.txt du
+# projet), qui exclut volontairement sqlalchemy, streamlit et plotly.
+#
+# - sqlalchemy : le requirements.txt du projet pin la version 2.0.51, alors
+#   qu'Airflow 2.9.3 exige sqlalchemy<2.0 pour son propre ORM interne.
+#   L'installer casse Airflow (TaskInstance ne charge plus, "db migrate" plante).
+#   Le code de src/etl/ (db_writer.py, db_config.py, monitoring.py) n'utilise
+#   que des fonctions Core disponibles depuis SQLAlchemy 1.4 : on laisse donc
+#   la version deja fournie par l'image Airflow, sans la toucher.
+# - streamlit / plotly : inutiles pour l'orchestration ETL, et tirent une
+#   version de protobuf trop recente pour les providers Airflow installes.
+COPY requirements-airflow.txt /requirements-airflow.txt
+RUN pip install --no-cache-dir -r /requirements-airflow.txt

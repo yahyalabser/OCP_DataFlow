@@ -1,4 +1,35 @@
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: Dockerfile.airflow
+  env_file:
+    - .env
+  environment:
+    # --- Config interne Airflow ---
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:-airflow}:${AIRFLOW_DB_PASSWORD:-airflow}@postgres-airflow/${AIRFLOW_DB_NAME:-airflow}
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+    # --- Rendre "from src.etl... import ..." utilisable depuis les DAGs ---
+    PYTHONPATH: /opt/airflow
+    # --- Mêmes variables que le service etl, pour que les DAGs appellent le même code ---
+    POSTGRES_HOST: postgres
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./src:/opt/airflow/src
+    - ./airflow-logs:/opt/airflow/logs
+    - ./airflow-plugins:/opt/airflow/plugins
+    - ./data:/opt/airflow/data          # même volume data/raw que le service etl
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    postgres-airflow:
+      condition: service_healthy
+
 services:
+  # ---------------------------------------------------------------------
+  # Base de données applicative (Data Warehouse ocp_dataflow)
+  # ---------------------------------------------------------------------
   postgres:
     image: postgres:15
     container_name: ocp_dataflow_db
@@ -18,6 +49,86 @@ services:
       retries: 10
     restart: unless-stopped
 
+  # ---------------------------------------------------------------------
+  # Base de données dédiée aux métadonnées Airflow (séparée de ocp_dataflow)
+  # ---------------------------------------------------------------------
+  postgres-airflow:
+    image: postgres:15
+    container_name: ocp_dataflow_airflow_db
+    environment:
+      POSTGRES_USER: ${AIRFLOW_DB_USER:-airflow}
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD:-airflow}
+      POSTGRES_DB: ${AIRFLOW_DB_NAME:-airflow}
+    volumes:
+      - pgdata_airflow:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${AIRFLOW_DB_USER:-airflow} -d ${AIRFLOW_DB_NAME:-airflow}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------
+  # Initialisation Airflow : migration de la base + création du compte admin
+  # Se lance une fois puis s'arrête (pas de restart)
+  # ---------------------------------------------------------------------
+  airflow-init:
+    <<: *airflow-common
+    container_name: ocp_dataflow_airflow_init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        set -e
+        airflow db migrate
+        airflow users create \
+          --username "${AIRFLOW_ADMIN_USER:-admin}" \
+          --firstname Admin \
+          --lastname OCP \
+          --role Admin \
+          --email "${AIRFLOW_ADMIN_EMAIL:-admin@example.com}" \
+          --password "${AIRFLOW_ADMIN_PASSWORD:-admin}" || true
+    restart: "no"
+
+  # ---------------------------------------------------------------------
+  # Interface web Airflow
+  # ---------------------------------------------------------------------
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: ocp_dataflow_airflow_webserver
+    command: airflow webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    depends_on:
+      postgres-airflow:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------
+  # Scheduler Airflow : déclenche les DAGs selon leur schedule_interval
+  # ---------------------------------------------------------------------
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: ocp_dataflow_airflow_scheduler
+    command: airflow scheduler
+    depends_on:
+      postgres-airflow:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------
+  # Pipeline ETL en exécution manuelle/ponctuelle (hors orchestration Airflow)
+  # Conservé pour du debug ou un run isolé sans passer par un DAG.
+  # ---------------------------------------------------------------------
   etl:
     build: .
     container_name: ocp_dataflow_etl
@@ -33,7 +144,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    profiles: ["manual"]     # ne démarre pas avec "docker compose up" seul
     restart: "no"
 
 volumes:
   pgdata:
+  pgdata_airflow:
