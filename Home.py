@@ -106,32 +106,32 @@ st.subheader("Dashboards disponibles")
 
 dashboards = [
     {
-        "page": "pages/1_📈_Marche_Boursier.py",
+        "page": "pages/Marche_Boursier.py",
         "label": "📈 Marché boursier",
         "desc": "FactStockPrices — cours OHLCV des concurrents cotés d'OCP (MOS, NTR, CF, ICL, YARIY). Grain : Entreprise + Jour.",
     },
     {
-        "page": "pages/2_🌾_Production_Agricole.py",
+        "page": "pages/Production_Agricole.py",
         "label": "🌾 Production agricole",
         "desc": "FactCropProduction — production mondiale par pays / culture / année (FAOSTAT). Grain : Pays + Culture + Année + Élément.",
     },
     {
-        "page": "pages/3_🍞_Indice_Prix_Alimentaire.py",
+        "page": "pages/Indice_Prix_Alimentaire.py",
         "label": "🍞 Indice des prix alimentaires",
         "desc": "FactFoodPriceIndex — FAO Food Price Index et sous-indices (viande, lait, céréales, huiles, sucre). Grain : Mois.",
     },
     {
-        "page": "pages/4_🏭_Matieres_Premieres.py",
+        "page": "pages/Matieres_Premieres.py",
         "label": "🏭 Matières premières",
         "desc": "FactCommodityPrices — prix mondiaux des phosphates et engrais (World Bank CMO). Grain : Matière première + Mois.",
     },
     {
-        "page": "pages/5_📰_Actualites.py",
+        "page": "pages/Actualites.py",
         "label": "📰 Actualités",
         "desc": "FactNews — veille médiatique du secteur (OCP, phosphate, fertilizer, agriculture, concurrents). Grain : Article.",
     },
     {
-        "page": "pages/6_🏦_Finances_OCP.py",
+        "page": "pages/Finances_OCP.py",
         "label": "🏦 Finances OCP",
         "desc": "FactOCPFinancials — chiffre d'affaires, EBITDA, marge, résultat net trimestriels d'OCP. Grain : Trimestre.",
     },

@@ -130,4 +130,9 @@ def run_pipeline(logger=None) -> dict:
    logger.info(f"Dimensions -> Succès : {dim_results['success']} | Échecs : {dim_results['failed']}")
    logger.info(f"Faits -> Succès : {fact_results['success']} | Échecs : {fact_results['failed']}")
 
-   return {"results": results, "data": transformed_data}
+   return {
+      "results": results,
+      "data": transformed_data,
+      "dim_results": dim_results,
+      "fact_results": fact_results,
+   }
